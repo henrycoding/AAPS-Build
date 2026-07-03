@@ -82,6 +82,10 @@ jobs:
           PRIVATE_DEPLOY_KEY: ${{ secrets.PRIVATE_DEPLOY_KEY }}
           HOST: ${{ secrets.HOST }}
           AAPS_UPDATE_TOKEN: ${{ secrets.AAPS_UPDATE_TOKEN }}
+          TANG_KEYSTORE_BASE64: ${{ secrets.TANG_KEYSTORE_BASE64 }}
+          TANG_STORE_PASSWORD: ${{ secrets.TANG_STORE_PASSWORD }}
+          TANG_KEY_ALIAS: ${{ secrets.TANG_KEY_ALIAS }}
+          TANG_KEY_PASSWORD: ${{ secrets.TANG_KEY_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -102,6 +106,26 @@ jobs:
 
           if [[ "${{ inputs.upload_to_odoo }}" == "true" && -z "${HOST}" ]]; then
             echo "Odoo upload is enabled, but HOST is missing."
+            exit 1
+          fi
+
+          if [[ -z "${TANG_KEYSTORE_BASE64}" ]]; then
+            echo "Missing repository secret: TANG_KEYSTORE_BASE64"
+            exit 1
+          fi
+
+          if [[ -z "${TANG_STORE_PASSWORD}" ]]; then
+            echo "Missing repository secret: TANG_STORE_PASSWORD"
+            exit 1
+          fi
+
+          if [[ -z "${TANG_KEY_ALIAS}" ]]; then
+            echo "Missing repository secret: TANG_KEY_ALIAS"
+            exit 1
+          fi
+
+          if [[ -z "${TANG_KEY_PASSWORD}" ]]; then
+            echo "Missing repository secret: TANG_KEY_PASSWORD"
             exit 1
           fi
 
@@ -139,6 +163,27 @@ jobs:
 
           ssh-add -D >/dev/null 2>&1 || true
           kill "${SSH_AGENT_PID}" >/dev/null 2>&1 || true
+
+      - name: Restore Android signing config
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        env:
+          TANG_KEYSTORE_BASE64: ${{ secrets.TANG_KEYSTORE_BASE64 }}
+          TANG_STORE_PASSWORD: ${{ secrets.TANG_STORE_PASSWORD }}
+          TANG_KEY_ALIAS: ${{ secrets.TANG_KEY_ALIAS }}
+          TANG_KEY_PASSWORD: ${{ secrets.TANG_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          printf '%s' "${TANG_KEYSTORE_BASE64}" | base64 --decode > tang.keystore
+
+          {
+            echo ""
+            echo "tangStorePassword=${TANG_STORE_PASSWORD}"
+            echo "tangKeyAlias=${TANG_KEY_ALIAS}"
+            echo "tangKeyPassword=${TANG_KEY_PASSWORD}"
+          } >> local.properties
 
       - name: Set up JDK
         uses: actions/setup-java@v4
