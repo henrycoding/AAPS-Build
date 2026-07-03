@@ -8,9 +8,9 @@ on:
         required: true
         default: master
       gradle_task:
-        description: Gradle task to run
-        required: true
-        default: assembleRelease
+        description: Optional Gradle task override. Empty uses assemble{Flavor}Release.
+        required: false
+        default: ""
       project_dir:
         description: Directory inside the private repository that contains gradlew
         required: true
@@ -67,7 +67,7 @@ jobs:
 
     env:
       PRIVATE_REF: ${{ inputs.private_ref }}
-      GRADLE_TASK: ${{ inputs.gradle_task }}
+      GRADLE_TASK_INPUT: ${{ inputs.gradle_task }}
       PROJECT_DIR: ${{ inputs.project_dir }}
       FLAVOR: ${{ inputs.flavor }}
       CHANGELOG: ${{ inputs.changelog }}
@@ -162,13 +162,27 @@ jobs:
 
           build_log="${RUNNER_TEMP}/gradle-build.log"
 
-          if ./gradlew --no-daemon --console=plain ${GRADLE_TASK} > "${build_log}" 2>&1; then
+          gradle_task="${GRADLE_TASK_INPUT}"
+          if [[ -z "${gradle_task}" ]]; then
+            case "${FLAVOR}" in
+              full) gradle_task="assembleFullRelease" ;;
+              mednovo) gradle_task="assembleMednovoRelease" ;;
+              *)
+                echo "Unsupported flavor: ${FLAVOR}"
+                exit 1
+                ;;
+            esac
+          fi
+
+          echo "Running Gradle task: ${gradle_task}"
+
+          if ./gradlew --no-daemon --console=plain "${gradle_task}" > "${build_log}" 2>&1; then
             echo "Gradle build completed."
           else
             echo "Gradle build failed."
             if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" ]]; then
-              echo "Showing the last 120 lines because show_failure_log_tail=true:"
-              tail -n 120 "${build_log}"
+              echo "Showing the last 500 lines because show_failure_log_tail=true:"
+              tail -n 500 "${build_log}"
             else
               echo "Build log was not printed to avoid exposing private project details."
             fi
