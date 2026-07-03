@@ -8,7 +8,7 @@ on:
         required: true
         default: master
       gradle_task:
-        description: Optional Gradle task override. Empty uses assemble{Flavor}Release.
+        description: Optional Gradle task override. Empty uses :app:assemble{Flavor}Release.
         required: false
         default: ""
       project_dir:
@@ -165,8 +165,8 @@ jobs:
           gradle_task="${GRADLE_TASK_INPUT}"
           if [[ -z "${gradle_task}" ]]; then
             case "${FLAVOR}" in
-              full) gradle_task="assembleFullRelease" ;;
-              mednovo) gradle_task="assembleMednovoRelease" ;;
+              full) gradle_task=":app:assembleFullRelease" ;;
+              mednovo) gradle_task=":app:assembleMednovoRelease" ;;
               *)
                 echo "Unsupported flavor: ${FLAVOR}"
                 exit 1
