@@ -1,0 +1,214 @@
+name: Private Gradle Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      private_ref:
+        description: Branch, tag, or commit to build from the private repository
+        required: true
+        default: master
+      gradle_task:
+        description: Gradle task to run
+        required: true
+        default: assembleRelease
+      project_dir:
+        description: Directory inside the private repository that contains gradlew
+        required: true
+        default: .
+      flavor:
+        description: AAPS APK flavor
+        required: true
+        type: choice
+        options:
+          - full
+          - mednovo
+        default: full
+      upload_to_odoo:
+        description: Upload the built APK to Odoo as a draft AAPS update
+        required: true
+        type: choice
+        options:
+          - "true"
+          - "false"
+        default: "true"
+      changelog:
+        description: Draft changelog sent to Odoo
+        required: false
+        default: ""
+      force_update:
+        description: Mark this draft as a forced update
+        required: true
+        type: choice
+        options:
+          - "false"
+          - "true"
+        default: "false"
+      show_failure_log_tail:
+        description: Print the last build log lines on failure. This may expose private paths or source snippets.
+        required: true
+        type: choice
+        options:
+          - "false"
+          - "true"
+        default: "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-gradle-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build private Gradle project
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      PRIVATE_REF: ${{ inputs.private_ref }}
+      GRADLE_TASK: ${{ inputs.gradle_task }}
+      PROJECT_DIR: ${{ inputs.project_dir }}
+      FLAVOR: ${{ inputs.flavor }}
+      CHANGELOG: ${{ inputs.changelog }}
+      FORCE_UPDATE: ${{ inputs.force_update }}
+      SHOW_FAILURE_LOG_TAIL: ${{ inputs.show_failure_log_tail }}
+
+    steps:
+      - name: Validate required secrets
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
+          PRIVATE_DEPLOY_KEY: ${{ secrets.PRIVATE_DEPLOY_KEY }}
+          HOST: ${{ secrets.HOST }}
+          AAPS_UPDATE_TOKEN: ${{ secrets.AAPS_UPDATE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${PRIVATE_REPOSITORY}" ]]; then
+            echo "Missing repository secret: PRIVATE_REPOSITORY"
+            exit 1
+          fi
+
+          if [[ -z "${PRIVATE_DEPLOY_KEY}" ]]; then
+            echo "Missing repository secret: PRIVATE_DEPLOY_KEY"
+            exit 1
+          fi
+
+          if [[ "${{ inputs.upload_to_odoo }}" == "true" && -z "${AAPS_UPDATE_TOKEN}" ]]; then
+            echo "Odoo upload is enabled, but AAPS_UPDATE_TOKEN is missing."
+            exit 1
+          fi
+
+          if [[ "${{ inputs.upload_to_odoo }}" == "true" && -z "${HOST}" ]]; then
+            echo "Odoo upload is enabled, but HOST is missing."
+            exit 1
+          fi
+
+      - name: Configure SSH for private checkout
+        shell: bash
+        env:
+          PRIVATE_DEPLOY_KEY: ${{ secrets.PRIVATE_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+
+          install -m 700 -d ~/.ssh
+          ssh-keyscan github.com 2>/dev/null >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          eval "$(ssh-agent -s)"
+          ssh-add - <<< "${PRIVATE_DEPLOY_KEY}"
+
+          {
+            echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}"
+            echo "SSH_AGENT_PID=${SSH_AGENT_PID}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Checkout private repository
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY: ${{ secrets.PRIVATE_REPOSITORY }}
+        run: |
+          set -euo pipefail
+
+          git init --quiet private-source
+          cd private-source
+          git remote add origin "git@github.com:${PRIVATE_REPOSITORY}.git"
+          git fetch --quiet --depth 1 origin "${PRIVATE_REF}"
+          git checkout --quiet --detach FETCH_HEAD
+
+          ssh-add -D >/dev/null 2>&1 || true
+          kill "${SSH_AGENT_PID}" >/dev/null 2>&1 || true
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Make Gradle wrapper executable
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+
+      - name: Build without publishing public artifacts
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          build_log="${RUNNER_TEMP}/gradle-build.log"
+
+          if ./gradlew --no-daemon --console=plain ${GRADLE_TASK} > "${build_log}" 2>&1; then
+            echo "Gradle build completed."
+          else
+            echo "Gradle build failed."
+            if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" ]]; then
+              echo "Showing the last 120 lines because show_failure_log_tail=true:"
+              tail -n 120 "${build_log}"
+            else
+              echo "Build log was not printed to avoid exposing private project details."
+            fi
+            exit 1
+          fi
+
+      - name: Upload APK draft to Odoo AAPS update manager
+        if: ${{ inputs.upload_to_odoo == 'true' }}
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        env:
+          HOST: ${{ secrets.HOST }}
+          AAPS_UPDATE_TOKEN: ${{ secrets.AAPS_UPDATE_TOKEN }}
+          AAPS_ALLOWED_PHONE_NUMBERS: ${{ secrets.AAPS_ALLOWED_PHONE_NUMBERS }}
+        run: |
+          set -euo pipefail
+
+          apk_path="app/${FLAVOR}/app-${FLAVOR}-release-protected.apk"
+
+          if [[ ! -f "${apk_path}" ]]; then
+            echo "APK not found at: ${apk_path}"
+            exit 1
+          fi
+
+          allowed_phone_numbers="${AAPS_ALLOWED_PHONE_NUMBERS:-*}"
+          force_update_value="0"
+          case "${FORCE_UPDATE}" in
+            true|1|yes|on) force_update_value="1" ;;
+          esac
+
+          response_file="${RUNNER_TEMP}/odoo-upload-response.txt"
+
+          curl --fail --show-error --silent \
+            --output "${response_file}" \
+            --request POST "${HOST%/}/aaps_update/ci/upload" \
+            --header "X-AAPS-Update-Token: ${AAPS_UPDATE_TOKEN}" \
+            --form "apk=@${apk_path}" \
+            --form "flavor=${FLAVOR}" \
+            --form "changelog=${CHANGELOG}" \
+            --form "allowed_phone_numbers=${allowed_phone_numbers}" \
+            --form "force_update=${force_update_value}"
+
+          echo "APK uploaded to Odoo as a draft AAPS update."
