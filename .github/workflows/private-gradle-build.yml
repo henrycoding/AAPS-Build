@@ -62,8 +62,8 @@ concurrency:
 jobs:
   build:
     name: Build private Gradle project
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: macos-latest
+    timeout-minutes: 180
 
     env:
       PRIVATE_REF: ${{ inputs.private_ref }}
@@ -176,7 +176,11 @@ jobs:
           set -euo pipefail
           umask 077
 
-          printf '%s' "${TANG_KEYSTORE_BASE64}" | base64 --decode > tang.keystore
+          if base64 --help 2>&1 | grep -q -- '--decode'; then
+            printf '%s' "${TANG_KEYSTORE_BASE64}" | base64 --decode > tang.keystore
+          else
+            printf '%s' "${TANG_KEYSTORE_BASE64}" | base64 -D > tang.keystore
+          fi
 
           {
             echo ""
