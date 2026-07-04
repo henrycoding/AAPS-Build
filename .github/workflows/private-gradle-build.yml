@@ -62,7 +62,7 @@ concurrency:
 jobs:
   build:
     name: Build private Gradle project
-    runs-on: macos-latest
+    runs-on: macos-13
     timeout-minutes: 180
 
     env:
