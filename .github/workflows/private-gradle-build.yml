@@ -194,7 +194,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: private-source/${{ inputs.project_dir }}/third_party/o-mvll/deps/LLVM21-NDK29-Linux
-          key: omvll-linux-deps-llvm21-ndk29-v1
+          key: omvll-linux-deps-llvm21-ndk29-v2
 
       - name: Prepare O-MVLL Linux deps
         if: ${{ steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
@@ -218,8 +218,22 @@ jobs:
           tar -xf "${tmp_dir}/omvll-deps-ndk-r29d.tar" -C "${tmp_dir}"
           tar -xzf "${tmp_dir}"/omvll-deps-ndk-*/android-llvm-toolchain-r29d.tar.gz -C "${tmp_dir}"
 
+          toolchain_dir="$(find "${tmp_dir}" -type d -name android-llvm-toolchain-r29d -print -quit)"
+          if [[ -z "${toolchain_dir}" ]]; then
+            echo "O-MVLL deps did not contain android-llvm-toolchain-r29d"
+            exit 1
+          fi
+
+          if [[ -f "${toolchain_dir}/out.tar.gz" && ! -d "${toolchain_dir}/out" ]]; then
+            tar -xzf "${toolchain_dir}/out.tar.gz" -C "${toolchain_dir}"
+          fi
+
+          if [[ -f "${toolchain_dir}/out/stage2.tar.gz" && ! -d "${toolchain_dir}/out/stage2" ]]; then
+            tar -xzf "${toolchain_dir}/out/stage2.tar.gz" -C "${toolchain_dir}/out"
+          fi
+
           rm -rf "${target_dir}"
-          mv "${tmp_dir}/android-llvm-toolchain-r29d/out/stage2" "${target_dir}"
+          mv "${toolchain_dir}/out/stage2" "${target_dir}"
 
           if [[ ! -f "${target_dir}/lib/libLLVM.so" ]]; then
             echo "O-MVLL Linux deps did not produce ${target_dir}/lib/libLLVM.so"
