@@ -305,6 +305,17 @@ jobs:
           }
           GRADLE
 
+      - name: Disable Linux shell-native O-MVLL
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          shell_config="third_party/o-mvll/omvll_shell_config.py"
+          if [[ -f "${shell_config}" ]]; then
+            mv "${shell_config}" "${shell_config}.ci-disabled"
+          fi
+
       - name: Build without publishing public artifacts
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
