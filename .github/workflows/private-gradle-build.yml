@@ -62,7 +62,7 @@ concurrency:
 jobs:
   build:
     name: Build private Gradle project
-    runs-on: macos-13
+    runs-on: ubuntu-latest
     timeout-minutes: 180
 
     env:
@@ -188,6 +188,45 @@ jobs:
             echo "tangKeyAlias=${TANG_KEY_ALIAS}"
             echo "tangKeyPassword=${TANG_KEY_PASSWORD}"
           } >> local.properties
+
+      - name: Restore O-MVLL Linux deps cache
+        id: omvll-linux-deps-cache
+        uses: actions/cache@v4
+        with:
+          path: private-source/${{ inputs.project_dir }}/third_party/o-mvll/deps/LLVM21-NDK29-Linux
+          key: omvll-linux-deps-llvm21-ndk29-v1
+
+      - name: Prepare O-MVLL Linux deps
+        if: ${{ steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          omvll_root="third_party/o-mvll"
+          deps_dir="${omvll_root}/deps"
+          target_dir="${deps_dir}/LLVM21-NDK29-Linux"
+          tmp_dir="${RUNNER_TEMP}/omvll-linux-deps"
+
+          rm -rf "${tmp_dir}"
+          mkdir -p "${tmp_dir}" "${deps_dir}"
+
+          curl --fail --location --retry 3 --retry-delay 10 \
+            --output "${tmp_dir}/omvll-deps-ndk-r29d.tar" \
+            "https://open-obfuscator.build38.io/static/omvll-deps-ndk-r29d.tar"
+
+          tar -xf "${tmp_dir}/omvll-deps-ndk-r29d.tar" -C "${tmp_dir}"
+          tar -xzf "${tmp_dir}"/omvll-deps-ndk-*/android-llvm-toolchain-r29d.tar.gz -C "${tmp_dir}"
+
+          rm -rf "${target_dir}"
+          mv "${tmp_dir}/android-llvm-toolchain-r29d/out/stage2" "${target_dir}"
+
+          if [[ ! -f "${target_dir}/lib/libLLVM.so" ]]; then
+            echo "O-MVLL Linux deps did not produce ${target_dir}/lib/libLLVM.so"
+            exit 1
+          fi
+
+          rm -rf "${tmp_dir}"
 
       - name: Set up JDK
         uses: actions/setup-java@v4
