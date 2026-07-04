@@ -287,6 +287,44 @@ jobs:
           set -euo pipefail
           chmod +x ./gradlew
 
+      - name: Select Android NDK 29
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          project_ndk_version="29.0.14206865"
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager="${sdk_root}/cmdline-tools/latest/bin/sdkmanager"
+
+          if [[ ! -x "${sdkmanager}" ]]; then
+            echo "sdkmanager not found at ${sdkmanager}"
+            exit 1
+          fi
+
+          if [[ ! -x "${sdk_root}/ndk/${project_ndk_version}/ndk-build" ]]; then
+            yes | "${sdkmanager}" "ndk;${project_ndk_version}" >/dev/null
+          fi
+
+          ndk_dir="${sdk_root}/ndk/${project_ndk_version}"
+          if [[ ! -x "${ndk_dir}/ndk-build" ]]; then
+            echo "NDK ${project_ndk_version} was not installed at ${ndk_dir}"
+            exit 1
+          fi
+
+          {
+            echo "ANDROID_NDK_HOME=${ndk_dir}"
+            echo "ANDROID_NDK_ROOT=${ndk_dir}"
+          } >> "${GITHUB_ENV}"
+
+          if [[ -f local.properties ]]; then
+            sed '/^ndk\.dir=/d' local.properties > local.properties.ci
+            mv local.properties.ci local.properties
+          fi
+          echo "ndk.dir=${ndk_dir}" >> local.properties
+
+          echo "Selected Android NDK: ${ndk_dir}"
+
       - name: Configure nested Gradle builds
         shell: bash
         run: |
