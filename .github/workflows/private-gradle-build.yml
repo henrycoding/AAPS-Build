@@ -242,12 +242,43 @@ jobs:
 
           rm -rf "${tmp_dir}"
 
+      - name: Set up JDK 17 for nested tools
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
+
+      - name: Add Linux java_home compatibility shim
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo mkdir -p /usr/libexec
+          sudo tee /usr/libexec/java_home >/dev/null <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          if [[ "${1:-}" == "-v" && "${2:-}" == "17" && -n "${JAVA_HOME_17_X64:-}" ]]; then
+            printf '%s\n' "${JAVA_HOME_17_X64}"
+            exit 0
+          fi
+
+          if [[ -n "${JAVA_HOME:-}" ]]; then
+            printf '%s\n' "${JAVA_HOME}"
+            exit 0
+          fi
+
+          echo "No matching Java home found" >&2
+          exit 1
+          SH
+          sudo chmod +x /usr/libexec/java_home
 
       - name: Make Gradle wrapper executable
         shell: bash
