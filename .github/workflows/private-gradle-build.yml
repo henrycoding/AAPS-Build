@@ -190,6 +190,7 @@ jobs:
           } >> local.properties
 
       - name: Restore O-MVLL Linux deps cache
+        if: ${{ false }}
         id: omvll-linux-deps-cache
         uses: actions/cache@v4
         with:
@@ -197,7 +198,7 @@ jobs:
           key: omvll-linux-deps-llvm21-ndk29-v2
 
       - name: Prepare O-MVLL Linux deps
-        if: ${{ steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
+        if: ${{ false && steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
         run: |
@@ -388,6 +389,20 @@ jobs:
             sed -i '/^LOCAL_MODULE[[:space:]]*:=/a LOCAL_SHORT_COMMANDS := true' "${android_mk}"
           fi
 
+      - name: Skip Linux O-MVLL toolchain setup
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          app_build="app/build.gradle.kts"
+          if [[ ! -f "${app_build}" ]]; then
+            echo "app build script not found at ${app_build}"
+            exit 1
+          fi
+
+          sed -i 's/^[[:space:]]*ensureOmvllToolchain(omvllRoot, ndkDir)/        logger.lifecycle("CI skips O-MVLL toolchain setup on Linux")/' "${app_build}"
+
       - name: Build without publishing public artifacts
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
@@ -438,7 +453,7 @@ jobs:
           trap 'echo "Build step received SIGTERM."; show_build_log_tail; cleanup; exit 143' TERM INT
 
           set +e
-          ./gradlew --no-daemon --console=plain --max-workers=2 "${gradle_task}" > "${build_log}" 2>&1
+          ./gradlew --no-daemon --console=plain --max-workers=4 "${gradle_task}" > "${build_log}" 2>&1
           gradle_status="$?"
           set -e
 
