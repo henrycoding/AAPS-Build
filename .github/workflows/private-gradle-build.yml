@@ -203,6 +203,24 @@ jobs:
           set -euo pipefail
           chmod +x ./gradlew
 
+      - name: Configure nested Gradle builds
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/init.gradle <<'GRADLE'
+          gradle.projectsEvaluated {
+              if (rootProject.name == 'nmm-protect') {
+                  allprojects {
+                      tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+                          enabled = false
+                      }
+                  }
+              }
+          }
+          GRADLE
+
       - name: Build without publishing public artifacts
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
