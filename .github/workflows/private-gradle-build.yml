@@ -372,6 +372,22 @@ jobs:
             exit 1
           fi
 
+      - name: Use short commands for dex2c native link
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          android_mk="third_party/dex2c/project/jni/Android.mk"
+          if [[ ! -f "${android_mk}" ]]; then
+            echo "dex2c Android.mk not found at ${android_mk}"
+            exit 1
+          fi
+
+          if ! grep -q '^LOCAL_SHORT_COMMANDS *:=' "${android_mk}"; then
+            sed -i '/^LOCAL_MODULE[[:space:]]*:=/a LOCAL_SHORT_COMMANDS := true' "${android_mk}"
+          fi
+
       - name: Build without publishing public artifacts
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
