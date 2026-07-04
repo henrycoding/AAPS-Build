@@ -394,8 +394,21 @@ jobs:
 
           echo "Running Gradle task: ${gradle_task}"
 
-          ./gradlew --no-daemon --console=plain "${gradle_task}" > "${build_log}" 2>&1 &
-          gradle_pid="$!"
+          cleanup() {
+            if [[ -n "${heartbeat_pid:-}" ]]; then
+              kill "${heartbeat_pid}" >/dev/null 2>&1 || true
+              wait "${heartbeat_pid}" >/dev/null 2>&1 || true
+            fi
+          }
+
+          show_build_log_tail() {
+            if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" && -f "${build_log}" ]]; then
+              echo "Showing the last 500 lines because show_failure_log_tail=true:"
+              tail -n 500 "${build_log}"
+            else
+              echo "Build log was not printed to avoid exposing private project details."
+            fi
+          }
 
           (
             while true; do
@@ -405,27 +418,22 @@ jobs:
           ) &
           heartbeat_pid="$!"
 
-          trap 'kill "${gradle_pid}" "${heartbeat_pid}" >/dev/null 2>&1 || true' EXIT
+          trap cleanup EXIT
+          trap 'echo "Build step received SIGTERM."; show_build_log_tail; cleanup; exit 143' TERM INT
 
           set +e
-          wait "${gradle_pid}"
+          ./gradlew --no-daemon --console=plain --max-workers=2 "${gradle_task}" > "${build_log}" 2>&1
           gradle_status="$?"
           set -e
 
-          kill "${heartbeat_pid}" >/dev/null 2>&1 || true
-          wait "${heartbeat_pid}" >/dev/null 2>&1 || true
-          trap - EXIT
+          cleanup
+          trap - EXIT TERM INT
 
           if [[ "${gradle_status}" -eq 0 ]]; then
             echo "Gradle build completed."
           else
             echo "Gradle build failed."
-            if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" ]]; then
-              echo "Showing the last 500 lines because show_failure_log_tail=true:"
-              tail -n 500 "${build_log}"
-            else
-              echo "Build log was not printed to avoid exposing private project details."
-            fi
+            show_build_log_tail
             exit 1
           fi
 
