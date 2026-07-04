@@ -389,6 +389,24 @@ jobs:
             sed -i '/^LOCAL_MODULE[[:space:]]*:=/a LOCAL_SHORT_COMMANDS := true' "${android_mk}"
           fi
 
+      - name: Narrow Linux dex2c rules for CI
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          rules_file="app/protect-dex2c-rules.txt"
+          if [[ ! -f "${rules_file}" ]]; then
+            echo "dex2c rules file not found at ${rules_file}"
+            exit 1
+          fi
+
+          cat > "${rules_file}" <<'RULES'
+          app.aaps.core.interfaces.auth.PumpAuthCrypto#*(*)*
+          app.aaps.implementation.config.ProtectedConfig#*(*)*
+          app.aaps.core.nssdk.networking.NSAuthInterceptor#*(*)*
+          RULES
+
       - name: Skip Linux O-MVLL toolchain setup
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
