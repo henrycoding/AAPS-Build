@@ -354,6 +354,24 @@ jobs:
             mv "${shell_config}" "${shell_config}.ci-disabled"
           fi
 
+      - name: Disable Linux app dex2c O-MVLL
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          protect_config="app/protect-packer.toml"
+          if [[ ! -f "${protect_config}" ]]; then
+            echo "protect-packer config not found at ${protect_config}"
+            exit 1
+          fi
+
+          sed -i 's/^omvll_enabled = true$/omvll_enabled = false/' "${protect_config}"
+          if grep -q '^omvll_enabled = true$' "${protect_config}"; then
+            echo "Failed to disable app dex2c O-MVLL in ${protect_config}"
+            exit 1
+          fi
+
       - name: Build without publishing public artifacts
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
