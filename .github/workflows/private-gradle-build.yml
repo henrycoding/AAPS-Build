@@ -434,6 +434,8 @@ jobs:
 
           required_paths=(
             "${omvll_root}/omvll-ndk.so"
+            "${omvll_root}/deps/LLVM21-NDK29-Linux/bin/clang"
+            "${omvll_root}/deps/LLVM21-NDK29-Linux/bin/clang++"
             "${omvll_root}/deps/LLVM21-NDK29-Linux/lib/libLLVM.so"
             "${omvll_root}/Python-3.10.7/Lib"
             "${omvll_root}/omvll_app_native_config.py"
@@ -453,47 +455,10 @@ jobs:
             exit 1
           fi
 
-          ndk_host_lib="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib"
+          omvll_toolchain="${omvll_root}/deps/LLVM21-NDK29-Linux"
           omvll_deps_lib="${omvll_root}/deps/LLVM21-NDK29-Linux/lib"
-          if [[ ! -d "${ndk_host_lib}" ]]; then
-            echo "NDK host library directory is missing: ${ndk_host_lib}"
-            exit 1
-          fi
 
-          # O-MVLL must resolve libc++ from the exact NDK used by clang before
-          # resolving libLLVM from the generated O-MVLL dependency bundle.
-          app_cmake="app/src/main/cpp/CMakeLists.txt"
-          shell_cmake="third_party/protectPacker/shell/src/main/cpp/CMakeLists.txt"
-          nmmp_cmake="third_party/nmmp/nmm-protect/mksrc/CMakeLists.txt"
-          nmmp_zip="third_party/nmmp/nmm-protect/apkprotect/src/main/resources/vmsrc.zip"
-          dex2c_script="third_party/dex2c/dcc.py"
-
-          sed -i 's#LD_LIBRARY_PATH=${MDP_APP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib:${MDP_APP_OMVLL_DEPS_LIB}#' "${app_cmake}"
-          sed -i 's#LD_LIBRARY_PATH=${MDP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib:${MDP_OMVLL_DEPS_LIB}#' "${shell_cmake}"
-          sed -i 's#LD_LIBRARY_PATH=${MDP_NMMP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib:${MDP_NMMP_OMVLL_DEPS_LIB}#' "${nmmp_cmake}"
-          sed -i 's/lib_paths.append(ndk_lib)/lib_paths.insert(0, ndk_lib)/' "${dex2c_script}"
-
-          nmmp_zip_tmp="$(mktemp -d)"
-          unzip -q "${nmmp_zip}" -d "${nmmp_zip_tmp}"
-          sed -i 's#LD_LIBRARY_PATH=${MDP_NMMP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib:${MDP_NMMP_OMVLL_DEPS_LIB}#' "${nmmp_zip_tmp}/CMakeLists.txt"
-          (
-            cd "${nmmp_zip_tmp}"
-            zip -q -r "${GITHUB_WORKSPACE}/private-source/${PROJECT_DIR}/${nmmp_zip}" .
-          )
-          rm -rf "${nmmp_zip_tmp}"
-
-          for patched_file in "${app_cmake}" "${shell_cmake}" "${nmmp_cmake}"; do
-            if ! grep -qF 'LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib:' "${patched_file}"; then
-              echo "Failed to configure the NDK runtime path in ${patched_file}"
-              exit 1
-            fi
-          done
-          if ! grep -qF 'lib_paths.insert(0, ndk_lib)' "${dex2c_script}"; then
-            echo "Failed to prioritize the NDK runtime path for dex2c"
-            exit 1
-          fi
-
-          if ! ldd_output="$(LD_LIBRARY_PATH="${ndk_host_lib}:${omvll_deps_lib}" \
+          if ! ldd_output="$(LD_LIBRARY_PATH="${omvll_deps_lib}" \
             ldd "${omvll_root}/omvll-ndk.so")"; then
             echo "Failed to inspect O-MVLL plugin dependencies"
             exit 1
@@ -507,14 +472,25 @@ jobs:
           printf '%s\n' 'int omvll_smoke(int value) { return value + 1; }' | \
             OMVLL_CONFIG="${PWD}/${omvll_root}/omvll_app_native_config.py" \
             OMVLL_PYTHONPATH="${PWD}/${omvll_root}/Python-3.10.7/Lib" \
-            LD_LIBRARY_PATH="${ndk_host_lib}:${omvll_deps_lib}" \
-            "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" \
+            LD_LIBRARY_PATH="${omvll_deps_lib}" \
+            "${omvll_toolchain}/bin/clang++" \
               --target=aarch64-none-linux-android27 \
               --sysroot="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot" \
               -fpass-plugin="${PWD}/${omvll_root}/omvll-ndk.so" \
               -O2 -x c++ -c - -o "${smoke_object}"
           if [[ ! -s "${smoke_object}" ]]; then
             echo "O-MVLL clang smoke test did not produce an object file"
+            exit 1
+          fi
+
+          ndk_bin="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for compiler in clang clang++; do
+            sudo mv "${ndk_bin}/${compiler}" "${ndk_bin}/${compiler}.ci-original"
+            sudo ln -s "${PWD}/${omvll_toolchain}/bin/${compiler}" "${ndk_bin}/${compiler}"
+          done
+
+          if ! LD_LIBRARY_PATH="${omvll_deps_lib}" "${ndk_bin}/clang++" --version; then
+            echo "Failed to activate the O-MVLL-compatible NDK compiler"
             exit 1
           fi
 
@@ -541,6 +517,8 @@ jobs:
           set -euo pipefail
 
           build_log="${RUNNER_TEMP}/gradle-build.log"
+          omvll_deps_lib="${PWD}/third_party/o-mvll/deps/LLVM21-NDK29-Linux/lib"
+          export LD_LIBRARY_PATH="${omvll_deps_lib}:${LD_LIBRARY_PATH:-}"
 
           gradle_task="${GRADLE_TASK_INPUT}"
           if [[ -z "${gradle_task}" ]]; then
