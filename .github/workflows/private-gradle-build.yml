@@ -514,6 +514,33 @@ jobs:
             exit 1
           fi
 
+      - name: Expose shell dex2c diagnostics
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          shell_build="third_party/protectPacker/shell/build.gradle.kts"
+          if [[ ! -f "${shell_build}" ]]; then
+            echo "protectPacker shell build script was not found"
+            exit 1
+          fi
+
+          if grep -qF 'println(output.trimEnd())' "${shell_build}"; then
+            echo "Shell dex2c diagnostics are already exposed"
+          elif grep -qF 'error("shell dex2c failed' "${shell_build}"; then
+            perl -0pi -e 's/(        val process = processBuilder\.start\(\)\n        val output = process\.inputStream\.bufferedReader\(\)\.readText\(\)\n        val exit = process\.waitFor\(\)\n)(        if \(exit != 0\) \{\n            error\("shell dex2c failed)/$1        if (output.isNotBlank()) {\n            println(output.trimEnd())\n        }\n$2/' "${shell_build}"
+          else
+            echo "Unsupported shell dex2c process handling"
+            exit 1
+          fi
+
+          if ! grep -B 4 -F 'error("shell dex2c failed' "${shell_build}" \
+            | grep -qF 'println(output.trimEnd())'; then
+            echo "Failed to expose shell dex2c diagnostics"
+            exit 1
+          fi
+
       - name: Prepare and verify full O-MVLL protection
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
