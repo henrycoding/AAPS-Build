@@ -194,7 +194,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: private-source/**/third_party/o-mvll/deps/LLVM21-NDK29-Linux
-          key: omvll-linux-deps-llvm21-ndk29-v2
+          key: omvll-linux-deps-llvm21-ndk29-v3
 
       - name: Prepare O-MVLL Linux deps
         if: ${{ steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
@@ -207,16 +207,27 @@ jobs:
           deps_dir="${omvll_root}/deps"
           target_dir="${deps_dir}/LLVM21-NDK29-Linux"
           tmp_dir="${RUNNER_TEMP}/omvll-linux-deps"
+          build_deps_dir="${tmp_dir}/build-deps"
+          omvll_commit="9e70384a5e3356164f8aea78b956b81aa1dae04f"
 
           rm -rf "${tmp_dir}"
-          mkdir -p "${tmp_dir}" "${deps_dir}"
+          mkdir -p "${tmp_dir}" "${build_deps_dir}" "${deps_dir}"
 
           curl --fail --location --retry 3 --retry-delay 10 \
             --output "${tmp_dir}/omvll-deps-ndk-r29d.tar" \
             "https://open-obfuscator.build38.io/static/omvll-deps-ndk-r29d.tar"
 
           tar -xf "${tmp_dir}/omvll-deps-ndk-r29d.tar" -C "${tmp_dir}"
-          tar -xzf "${tmp_dir}"/omvll-deps-ndk-*/android-llvm-toolchain-r29d.tar.gz -C "${tmp_dir}"
+          bundle_dir="$(find "${tmp_dir}" -maxdepth 2 -type d -name 'omvll-deps-ndk-*' -print -quit)"
+          if [[ -z "${bundle_dir}" ]]; then
+            echo "O-MVLL dependency bundle directory was not found"
+            exit 1
+          fi
+
+          tar -xzf "${bundle_dir}/android-llvm-toolchain-r29d.tar.gz" -C "${tmp_dir}"
+          tar -xzf "${bundle_dir}/Python-slim.tar.gz" -C "${build_deps_dir}"
+          tar -xzf "${bundle_dir}/pybind11.tar.gz" -C "${build_deps_dir}"
+          tar -xzf "${bundle_dir}/spdlog-1.10.0-Linux.tar.gz" -C "${build_deps_dir}"
 
           toolchain_dir="$(find "${tmp_dir}" -type d -name android-llvm-toolchain-r29d -print -quit)"
           if [[ -z "${toolchain_dir}" ]]; then
@@ -228,17 +239,72 @@ jobs:
             tar -xzf "${toolchain_dir}/out.tar.gz" -C "${toolchain_dir}"
           fi
 
+          if [[ -f "${toolchain_dir}/out/stage1-install.tar.gz" && ! -d "${toolchain_dir}/out/stage1-install" ]]; then
+            tar -xzf "${toolchain_dir}/out/stage1-install.tar.gz" -C "${toolchain_dir}/out"
+          fi
+
           if [[ -f "${toolchain_dir}/out/stage2.tar.gz" && ! -d "${toolchain_dir}/out/stage2" ]]; then
             tar -xzf "${toolchain_dir}/out/stage2.tar.gz" -C "${toolchain_dir}/out"
           fi
 
-          rm -rf "${target_dir}"
-          mv "${toolchain_dir}/out/stage2" "${target_dir}"
+          stage1_dir="${toolchain_dir}/out/stage1-install"
+          stage2_dir="${toolchain_dir}/out/stage2"
+          required_build_paths=(
+            "${stage1_dir}/bin/clang"
+            "${stage1_dir}/bin/clang++"
+            "${stage2_dir}/lib/cmake/llvm/LLVMConfig.cmake"
+            "${build_deps_dir}/Python-slim/lib/libpython3.10.a"
+            "${build_deps_dir}/Python-slim/include/python3.10"
+            "${build_deps_dir}/pybind11/share/cmake/pybind11"
+            "${build_deps_dir}/spdlog-1.10.0-Linux/lib/cmake/spdlog"
+          )
+          for required_path in "${required_build_paths[@]}"; do
+            if [[ ! -e "${required_path}" ]]; then
+              echo "Required O-MVLL build dependency is missing: ${required_path}"
+              exit 1
+            fi
+          done
 
-          if [[ ! -f "${target_dir}/lib/libLLVM.so" ]]; then
-            echo "O-MVLL Linux deps did not produce ${target_dir}/lib/libLLVM.so"
+          curl --fail --location --retry 3 --retry-delay 10 \
+            --output "${tmp_dir}/o-mvll-source.tar.gz" \
+            "https://github.com/open-obfuscator/o-mvll/archive/${omvll_commit}.tar.gz"
+          mkdir -p "${tmp_dir}/source"
+          tar -xzf "${tmp_dir}/o-mvll-source.tar.gz" \
+            -C "${tmp_dir}/source" --strip-components=1
+
+          command -v cmake >/dev/null
+          command -v ninja >/dev/null
+          cmake -S "${tmp_dir}/source/src" -B "${tmp_dir}/plugin-build" -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER="${stage1_dir}/bin/clang++" \
+            -DCMAKE_C_COMPILER="${stage1_dir}/bin/clang" \
+            -DCMAKE_CXX_FLAGS="-stdlib=libstdc++ -std=c++17" \
+            -DPython3_ROOT_DIR="${build_deps_dir}/Python-slim" \
+            -DPython3_LIBRARY="${build_deps_dir}/Python-slim/lib/libpython3.10.a" \
+            -DPython3_INCLUDE_DIR="${build_deps_dir}/Python-slim/include/python3.10" \
+            -Dpybind11_DIR="${build_deps_dir}/pybind11/share/cmake/pybind11" \
+            -Dspdlog_DIR="${build_deps_dir}/spdlog-1.10.0-Linux/lib/cmake/spdlog" \
+            -DLLVM_DIR="${stage2_dir}/lib/cmake/llvm" \
+            -DOMVLL_ABI=CustomAndroid
+          cmake --build "${tmp_dir}/plugin-build" --target OMVLL --parallel 4
+
+          if [[ ! -s "${tmp_dir}/plugin-build/libOMVLL.so" ]]; then
+            echo "O-MVLL source build did not produce libOMVLL.so"
             exit 1
           fi
+
+          rm -rf "${target_dir}"
+          mv "${stage2_dir}" "${target_dir}"
+          cp "${tmp_dir}/plugin-build/libOMVLL.so" "${target_dir}/omvll-ndk.so"
+
+          for required_path in \
+            "${target_dir}/lib/libLLVM.so" \
+            "${target_dir}/omvll-ndk.so"; do
+            if [[ ! -s "${required_path}" ]]; then
+              echo "O-MVLL Linux deps did not produce ${required_path}"
+              exit 1
+            fi
+          done
 
           rm -rf "${tmp_dir}"
 
@@ -247,7 +313,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: private-source/**/third_party/o-mvll/deps/LLVM21-NDK29-Linux
-          key: omvll-linux-deps-llvm21-ndk29-v2
+          key: omvll-linux-deps-llvm21-ndk29-v3
 
       - name: Set up JDK 17 for nested tools
         uses: actions/setup-java@v4
@@ -431,11 +497,11 @@ jobs:
           omvll_root="third_party/o-mvll"
           protect_config="app/protect-packer.toml"
           bash "${omvll_root}/setup.sh" "${ANDROID_NDK_HOME}"
+          cp "${omvll_root}/deps/LLVM21-NDK29-Linux/omvll-ndk.so" \
+            "${omvll_root}/omvll-ndk.so"
 
           required_paths=(
             "${omvll_root}/omvll-ndk.so"
-            "${omvll_root}/deps/LLVM21-NDK29-Linux/bin/clang"
-            "${omvll_root}/deps/LLVM21-NDK29-Linux/bin/clang++"
             "${omvll_root}/deps/LLVM21-NDK29-Linux/lib/libLLVM.so"
             "${omvll_root}/Python-3.10.7/Lib"
             "${omvll_root}/omvll_app_native_config.py"
@@ -455,8 +521,8 @@ jobs:
             exit 1
           fi
 
-          omvll_toolchain="${omvll_root}/deps/LLVM21-NDK29-Linux"
           omvll_deps_lib="${omvll_root}/deps/LLVM21-NDK29-Linux/lib"
+          ndk_clang="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++"
 
           if ! ldd_output="$(LD_LIBRARY_PATH="${omvll_deps_lib}" \
             ldd "${omvll_root}/omvll-ndk.so")"; then
@@ -473,24 +539,13 @@ jobs:
             OMVLL_CONFIG="${PWD}/${omvll_root}/omvll_app_native_config.py" \
             OMVLL_PYTHONPATH="${PWD}/${omvll_root}/Python-3.10.7/Lib" \
             LD_LIBRARY_PATH="${omvll_deps_lib}" \
-            "${omvll_toolchain}/bin/clang++" \
+            "${ndk_clang}" \
               --target=aarch64-none-linux-android27 \
               --sysroot="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot" \
               -fpass-plugin="${PWD}/${omvll_root}/omvll-ndk.so" \
               -O2 -x c++ -c - -o "${smoke_object}"
           if [[ ! -s "${smoke_object}" ]]; then
             echo "O-MVLL clang smoke test did not produce an object file"
-            exit 1
-          fi
-
-          ndk_bin="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          for compiler in clang clang++; do
-            sudo mv "${ndk_bin}/${compiler}" "${ndk_bin}/${compiler}.ci-original"
-            sudo ln -s "${PWD}/${omvll_toolchain}/bin/${compiler}" "${ndk_bin}/${compiler}"
-          done
-
-          if ! LD_LIBRARY_PATH="${omvll_deps_lib}" "${ndk_bin}/clang++" --version; then
-            echo "Failed to activate the O-MVLL-compatible NDK compiler"
             exit 1
           fi
 
