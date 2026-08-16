@@ -194,7 +194,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: private-source/**/third_party/o-mvll/deps/LLVM21-NDK29-Linux
-          key: omvll-linux-deps-llvm21-ndk29-v3
+          key: omvll-linux-deps-llvm21-ndk29-v4
 
       - name: Prepare O-MVLL Linux deps
         if: ${{ steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
@@ -272,6 +272,15 @@ jobs:
           tar -xzf "${tmp_dir}/o-mvll-source.tar.gz" \
             -C "${tmp_dir}/source" --strip-components=1
 
+          omvll_cmake="${tmp_dir}/source/src/CMakeLists.txt"
+          if ! grep -qF 'spdlog::spdlog pybind11::headers' "${omvll_cmake}"; then
+            echo "Unsupported O-MVLL spdlog link configuration"
+            exit 1
+          fi
+          sed -i \
+            's/spdlog::spdlog pybind11::headers/spdlog::spdlog_header_only pybind11::headers/' \
+            "${omvll_cmake}"
+
           command -v cmake >/dev/null
           command -v ninja >/dev/null
           cmake -S "${tmp_dir}/source/src" -B "${tmp_dir}/plugin-build" -GNinja \
@@ -313,7 +322,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: private-source/**/third_party/o-mvll/deps/LLVM21-NDK29-Linux
-          key: omvll-linux-deps-llvm21-ndk29-v3
+          key: omvll-linux-deps-llvm21-ndk29-v4
 
       - name: Set up JDK 17 for nested tools
         uses: actions/setup-java@v4
