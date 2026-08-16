@@ -344,6 +344,24 @@ jobs:
           }
           GRADLE
 
+      - name: Use minimal nmmp tool build for Linux CI
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          app_build="app/build.gradle.kts"
+          if [[ ! -f "${app_build}" ]]; then
+            echo "app build script not found at ${app_build}"
+            exit 1
+          fi
+
+          perl -0pi -e 's/"arsc:build",\n\s*"build",/"arsc:jar",\n            "jar",/' "${app_build}"
+          if ! grep -A 4 'nmmpDir.resolve("gradlew")' "${app_build}" | grep -q '"arsc:jar",'; then
+            echo "Failed to select the minimal nmmp tool build"
+            exit 1
+          fi
+
       - name: Disable Linux shell-native O-MVLL
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
