@@ -193,7 +193,7 @@ jobs:
         id: omvll-linux-deps-cache
         uses: actions/cache/restore@v4
         with:
-          path: private-source/${{ inputs.project_dir }}/third_party/o-mvll/deps/LLVM21-NDK29-Linux
+          path: private-source/**/third_party/o-mvll/deps/LLVM21-NDK29-Linux
           key: omvll-linux-deps-llvm21-ndk29-v2
 
       - name: Prepare O-MVLL Linux deps
@@ -246,7 +246,7 @@ jobs:
         if: ${{ steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
-          path: private-source/${{ inputs.project_dir }}/third_party/o-mvll/deps/LLVM21-NDK29-Linux
+          path: private-source/**/third_party/o-mvll/deps/LLVM21-NDK29-Linux
           key: omvll-linux-deps-llvm21-ndk29-v2
 
       - name: Set up JDK 17 for nested tools
@@ -453,7 +453,7 @@ jobs:
             exit 1
           fi
 
-          ndk_host_lib="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib64"
+          ndk_host_lib="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib"
           omvll_deps_lib="${omvll_root}/deps/LLVM21-NDK29-Linux/lib"
           if [[ ! -d "${ndk_host_lib}" ]]; then
             echo "NDK host library directory is missing: ${ndk_host_lib}"
@@ -468,14 +468,14 @@ jobs:
           nmmp_zip="third_party/nmmp/nmm-protect/apkprotect/src/main/resources/vmsrc.zip"
           dex2c_script="third_party/dex2c/dcc.py"
 
-          sed -i 's#LD_LIBRARY_PATH=${MDP_APP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib64:${MDP_APP_OMVLL_DEPS_LIB}#' "${app_cmake}"
-          sed -i 's#LD_LIBRARY_PATH=${MDP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib64:${MDP_OMVLL_DEPS_LIB}#' "${shell_cmake}"
-          sed -i 's#LD_LIBRARY_PATH=${MDP_NMMP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib64:${MDP_NMMP_OMVLL_DEPS_LIB}#' "${nmmp_cmake}"
+          sed -i 's#LD_LIBRARY_PATH=${MDP_APP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib:${MDP_APP_OMVLL_DEPS_LIB}#' "${app_cmake}"
+          sed -i 's#LD_LIBRARY_PATH=${MDP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib:${MDP_OMVLL_DEPS_LIB}#' "${shell_cmake}"
+          sed -i 's#LD_LIBRARY_PATH=${MDP_NMMP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib:${MDP_NMMP_OMVLL_DEPS_LIB}#' "${nmmp_cmake}"
           sed -i 's/lib_paths.append(ndk_lib)/lib_paths.insert(0, ndk_lib)/' "${dex2c_script}"
 
           nmmp_zip_tmp="$(mktemp -d)"
           unzip -q "${nmmp_zip}" -d "${nmmp_zip_tmp}"
-          sed -i 's#LD_LIBRARY_PATH=${MDP_NMMP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib64:${MDP_NMMP_OMVLL_DEPS_LIB}#' "${nmmp_zip_tmp}/CMakeLists.txt"
+          sed -i 's#LD_LIBRARY_PATH=${MDP_NMMP_OMVLL_DEPS_LIB}#LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib:${MDP_NMMP_OMVLL_DEPS_LIB}#' "${nmmp_zip_tmp}/CMakeLists.txt"
           (
             cd "${nmmp_zip_tmp}"
             zip -q -r "${GITHUB_WORKSPACE}/private-source/${PROJECT_DIR}/${nmmp_zip}" .
@@ -483,7 +483,7 @@ jobs:
           rm -rf "${nmmp_zip_tmp}"
 
           for patched_file in "${app_cmake}" "${shell_cmake}" "${nmmp_cmake}"; do
-            if ! grep -qF 'LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib64:' "${patched_file}"; then
+            if ! grep -qF 'LD_LIBRARY_PATH=$ENV{ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib:' "${patched_file}"; then
               echo "Failed to configure the NDK runtime path in ${patched_file}"
               exit 1
             fi
