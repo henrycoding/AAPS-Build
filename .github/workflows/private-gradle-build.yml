@@ -362,6 +362,32 @@ jobs:
             exit 1
           fi
 
+      - name: Stream nmmp native build output safely
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          native_builder="third_party/nmmp/nmm-protect/apkprotect/src/main/java/com/nmmedit/apkprotect/BuildNativeLib.java"
+          nmmp_bridge="third_party/protectPacker/packer/src/main/kotlin/com/apkprotect/packer/dex/NmmpExternalToolBridge.kt"
+          if [[ ! -f "${native_builder}" || ! -f "${nmmp_bridge}" ]]; then
+            echo "nmmp process sources were not found"
+            exit 1
+          fi
+
+          perl -0pi -e 's/\.command\(cmds\);/.command(cmds)\n                .redirectErrorStream(true);/' "${native_builder}"
+          sed -i '/printOutput(process.getErrorStream());/d' "${native_builder}"
+          if ! grep -q 'redirectErrorStream(true)' "${native_builder}"; then
+            echo "Failed to merge nmmp native builder output streams"
+            exit 1
+          fi
+
+          perl -0pi -e 's/val output = process\.inputStream\.bufferedReader\(\)\.use \{ it\.readText\(\) \}/val output = buildString {\n            process.inputStream.bufferedReader().useLines { lines ->\n                lines.forEach { line ->\n                    println(line)\n                    appendLine(line)\n                }\n            }\n        }/' "${nmmp_bridge}"
+          if grep -q 'use { it.readText() }' "${nmmp_bridge}"; then
+            echo "Failed to enable live nmmp output"
+            exit 1
+          fi
+
       - name: Disable Linux shell-native O-MVLL
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
