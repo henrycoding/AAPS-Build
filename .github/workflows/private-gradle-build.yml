@@ -63,7 +63,7 @@ jobs:
   build:
     name: Build private Gradle project
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 120
 
     env:
       PRIVATE_REF: ${{ inputs.private_ref }}
