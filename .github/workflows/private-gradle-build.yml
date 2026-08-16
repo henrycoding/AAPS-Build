@@ -625,8 +625,6 @@ jobs:
           set -euo pipefail
 
           build_log="${RUNNER_TEMP}/gradle-build.log"
-          omvll_deps_lib="${PWD}/third_party/o-mvll/deps/LLVM21-NDK29-Linux/lib"
-          export LD_LIBRARY_PATH="${omvll_deps_lib}:${LD_LIBRARY_PATH:-}"
 
           gradle_task="${GRADLE_TASK_INPUT}"
           if [[ -z "${gradle_task}" ]]; then
