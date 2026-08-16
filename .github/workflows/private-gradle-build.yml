@@ -190,7 +190,6 @@ jobs:
           } >> local.properties
 
       - name: Restore O-MVLL Linux deps cache
-        if: ${{ false }}
         id: omvll-linux-deps-cache
         uses: actions/cache@v4
         with:
@@ -198,7 +197,7 @@ jobs:
           key: omvll-linux-deps-llvm21-ndk29-v2
 
       - name: Prepare O-MVLL Linux deps
-        if: ${{ false && steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
+        if: ${{ steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
         run: |
@@ -356,8 +355,17 @@ jobs:
             exit 1
           fi
 
-          perl -0pi -e 's/"arsc:build",\n\s*"build",/"arsc:jar",\n            "jar",/' "${app_build}"
-          if ! grep -A 4 'nmmpDir.resolve("gradlew")' "${app_build}" | grep -q '"arsc:jar",'; then
+          if grep -q '"arsc:build",' "${app_build}" && grep -q '^[[:space:]]*"build",' "${app_build}"; then
+            perl -0pi -e 's/"arsc:build",\n\s*"build",/"arsc:jar",\n            "jar",/' "${app_build}"
+          elif grep -q '"arsc:jar",' "${app_build}" && grep -q '^[[:space:]]*"jar",' "${app_build}"; then
+            echo "Minimal nmmp tool build is already configured"
+          else
+            echo "Unsupported nmmp Gradle task configuration"
+            exit 1
+          fi
+
+          nmmp_build_block="$(grep -A 4 'nmmpDir.resolve("gradlew")' "${app_build}")"
+          if ! grep -q '"arsc:jar",' <<<"${nmmp_build_block}" || ! grep -q '^[[:space:]]*"jar",' <<<"${nmmp_build_block}"; then
             echo "Failed to select the minimal nmmp tool build"
             exit 1
           fi
@@ -375,45 +383,76 @@ jobs:
             exit 1
           fi
 
-          perl -0pi -e 's/\.command\(cmds\);/.command(cmds)\n                .redirectErrorStream(true);/' "${native_builder}"
-          sed -i '/printOutput(process.getErrorStream());/d' "${native_builder}"
-          if ! grep -q 'redirectErrorStream(true)' "${native_builder}"; then
+          if grep -qF '.command(cmds);' "${native_builder}" && grep -qF 'printOutput(process.getErrorStream());' "${native_builder}"; then
+            perl -0pi -e 's/\.command\(cmds\);/.command(cmds)\n                .redirectErrorStream(true);/' "${native_builder}"
+            sed -i '/printOutput(process.getErrorStream());/d' "${native_builder}"
+          elif grep -A 2 -F '.command(cmds)' "${native_builder}" | grep -qF '.redirectErrorStream(true)' \
+            && ! grep -qF 'printOutput(process.getErrorStream());' "${native_builder}"; then
+            echo "nmmp native builder output streams are already merged"
+          else
+            echo "Unsupported nmmp native builder process handling"
+            exit 1
+          fi
+
+          if ! grep -A 2 -F '.command(cmds)' "${native_builder}" | grep -qF '.redirectErrorStream(true)' \
+            || grep -qF 'printOutput(process.getErrorStream());' "${native_builder}"; then
             echo "Failed to merge nmmp native builder output streams"
             exit 1
           fi
 
-          perl -0pi -e 's/val output = process\.inputStream\.bufferedReader\(\)\.use \{ it\.readText\(\) \}/val output = buildString {\n            process.inputStream.bufferedReader().useLines { lines ->\n                lines.forEach { line ->\n                    println(line)\n                    appendLine(line)\n                }\n            }\n        }/' "${nmmp_bridge}"
-          if grep -q 'use { it.readText() }' "${nmmp_bridge}"; then
+          if grep -qF 'val output = process.inputStream.bufferedReader().use { it.readText() }' "${nmmp_bridge}"; then
+            perl -0pi -e 's/val output = process\.inputStream\.bufferedReader\(\)\.use \{ it\.readText\(\) \}/val output = buildString {\n            process.inputStream.bufferedReader().useLines { lines ->\n                lines.forEach { line ->\n                    println(line)\n                    appendLine(line)\n                }\n            }\n        }/' "${nmmp_bridge}"
+          elif grep -qF 'process.inputStream.bufferedReader().useLines { lines ->' "${nmmp_bridge}"; then
+            echo "Live nmmp output is already configured"
+          else
+            echo "Unsupported nmmp bridge output handling"
+            exit 1
+          fi
+
+          if grep -qF 'use { it.readText() }' "${nmmp_bridge}" \
+            || ! grep -qF 'process.inputStream.bufferedReader().useLines { lines ->' "${nmmp_bridge}"; then
             echo "Failed to enable live nmmp output"
             exit 1
           fi
 
-      - name: Disable Linux shell-native O-MVLL
+      - name: Prepare and verify full O-MVLL protection
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
         run: |
           set -euo pipefail
 
-          shell_config="third_party/o-mvll/omvll_shell_config.py"
-          if [[ -f "${shell_config}" ]]; then
-            mv "${shell_config}" "${shell_config}.ci-disabled"
-          fi
-
-      - name: Disable Linux app dex2c O-MVLL
-        shell: bash
-        working-directory: private-source/${{ inputs.project_dir }}
-        run: |
-          set -euo pipefail
-
+          omvll_root="third_party/o-mvll"
           protect_config="app/protect-packer.toml"
-          if [[ ! -f "${protect_config}" ]]; then
-            echo "protect-packer config not found at ${protect_config}"
+          bash "${omvll_root}/setup.sh" "${ANDROID_NDK_HOME}"
+
+          required_paths=(
+            "${omvll_root}/omvll-ndk.so"
+            "${omvll_root}/deps/LLVM21-NDK29-Linux/lib/libLLVM.so"
+            "${omvll_root}/Python-3.10.7/Lib"
+            "${omvll_root}/omvll_app_native_config.py"
+            "${omvll_root}/omvll_dex2c_config.py"
+            "${omvll_root}/omvll_nmmp_config.py"
+            "${omvll_root}/omvll_shell_config.py"
+          )
+          for required_path in "${required_paths[@]}"; do
+            if [[ ! -e "${required_path}" ]]; then
+              echo "Required O-MVLL component is missing: ${required_path}"
+              exit 1
+            fi
+          done
+
+          if ! grep -q '^omvll_enabled = true$' "${protect_config}"; then
+            echo "App dex2c O-MVLL must remain enabled in ${protect_config}"
             exit 1
           fi
 
-          sed -i 's/^omvll_enabled = true$/omvll_enabled = false/' "${protect_config}"
-          if grep -q '^omvll_enabled = true$' "${protect_config}"; then
-            echo "Failed to disable app dex2c O-MVLL in ${protect_config}"
+          if ! ldd_output="$(LD_LIBRARY_PATH="${omvll_root}/deps/LLVM21-NDK29-Linux/lib" \
+            ldd "${omvll_root}/omvll-ndk.so")"; then
+            echo "Failed to inspect O-MVLL plugin dependencies"
+            exit 1
+          fi
+          if grep -q 'not found' <<<"${ldd_output}"; then
+            echo "O-MVLL plugin has unresolved Linux dependencies"
             exit 1
           fi
 
@@ -432,38 +471,6 @@ jobs:
           if ! grep -q '^LOCAL_SHORT_COMMANDS *:=' "${android_mk}"; then
             sed -i '/^LOCAL_MODULE[[:space:]]*:=/a LOCAL_SHORT_COMMANDS := true' "${android_mk}"
           fi
-
-      - name: Narrow Linux dex2c rules for CI
-        shell: bash
-        working-directory: private-source/${{ inputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          rules_file="app/protect-dex2c-rules.txt"
-          if [[ ! -f "${rules_file}" ]]; then
-            echo "dex2c rules file not found at ${rules_file}"
-            exit 1
-          fi
-
-          cat > "${rules_file}" <<'RULES'
-          app.aaps.core.interfaces.auth.PumpAuthCrypto#*(*)*
-          app.aaps.implementation.config.ProtectedConfig#*(*)*
-          app.aaps.core.nssdk.networking.NSAuthInterceptor#*(*)*
-          RULES
-
-      - name: Skip Linux O-MVLL toolchain setup
-        shell: bash
-        working-directory: private-source/${{ inputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          app_build="app/build.gradle.kts"
-          if [[ ! -f "${app_build}" ]]; then
-            echo "app build script not found at ${app_build}"
-            exit 1
-          fi
-
-          sed -i 's/^[[:space:]]*ensureOmvllToolchain(omvllRoot, ndkDir)/        logger.lifecycle("CI skips O-MVLL toolchain setup on Linux")/' "${app_build}"
 
       - name: Build without publishing public artifacts
         shell: bash
