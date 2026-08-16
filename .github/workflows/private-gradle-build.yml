@@ -194,7 +194,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: private-source/**/third_party/o-mvll/deps/LLVM21-NDK29-Linux
-          key: omvll-linux-deps-llvm21-ndk29-v6
+          key: omvll-linux-deps-llvm21-ndk29-v7
 
       - name: Prepare O-MVLL Linux deps
         if: ${{ steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
@@ -295,7 +295,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER="${stage1_dir}/bin/clang++" \
             -DCMAKE_C_COMPILER="${stage1_dir}/bin/clang" \
-            -DCMAKE_CXX_FLAGS="-stdlib=libstdc++ -std=c++17" \
+            -DCMAKE_CXX_FLAGS="-stdlib=libc++ -std=c++17" \
             -DPython3_ROOT_DIR="${build_deps_dir}/Python-slim" \
             -DPython3_LIBRARY="${build_deps_dir}/Python-slim/lib/libpython3.10.a" \
             -DPython3_INCLUDE_DIR="${build_deps_dir}/Python-slim/include/python3.10" \
@@ -339,7 +339,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: private-source/**/third_party/o-mvll/deps/LLVM21-NDK29-Linux
-          key: omvll-linux-deps-llvm21-ndk29-v6
+          key: omvll-linux-deps-llvm21-ndk29-v7
 
       - name: Set up JDK 17 for nested tools
         uses: actions/setup-java@v4
