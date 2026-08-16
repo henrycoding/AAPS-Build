@@ -194,7 +194,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: private-source/**/third_party/o-mvll/deps/LLVM21-NDK29-Linux
-          key: omvll-linux-deps-llvm21-ndk29-v5
+          key: omvll-linux-deps-llvm21-ndk29-v6
 
       - name: Prepare O-MVLL Linux deps
         if: ${{ steps.omvll-linux-deps-cache.outputs.cache-hit != 'true' }}
@@ -212,6 +212,9 @@ jobs:
 
           rm -rf "${tmp_dir}"
           mkdir -p "${tmp_dir}" "${build_deps_dir}" "${deps_dir}"
+
+          sudo apt-get update -qq
+          sudo apt-get install --yes libc++-dev libc++abi-dev
 
           curl --fail --location --retry 3 --retry-delay 10 \
             --output "${tmp_dir}/omvll-deps-ndk-r29d.tar" \
@@ -249,12 +252,12 @@ jobs:
 
           stage1_dir="${toolchain_dir}/out/stage1-install"
           stage2_dir="${toolchain_dir}/out/stage2"
-          stage2_libcxx="$(find "${stage2_dir}" -name 'libc++.so.1' -print -quit)"
+          host_libcxx="$(find /usr/lib -name 'libc++.so.1' -print -quit)"
           required_build_paths=(
             "${stage1_dir}/bin/clang"
             "${stage1_dir}/bin/clang++"
             "${stage2_dir}/lib/cmake/llvm/LLVMConfig.cmake"
-            "${stage2_libcxx}"
+            "${host_libcxx}"
             "${build_deps_dir}/Python-slim/lib/libpython3.10.a"
             "${build_deps_dir}/Python-slim/include/python3.10"
             "${build_deps_dir}/pybind11/share/cmake/pybind11"
@@ -299,7 +302,7 @@ jobs:
             -Dpybind11_DIR="${build_deps_dir}/pybind11/share/cmake/pybind11" \
             -Dspdlog_DIR="${build_deps_dir}/spdlog-1.10.0-Linux/lib/cmake/spdlog" \
             -DLLVM_DIR="${stage2_dir}/lib/cmake/llvm" \
-            -DOMVLL_LIBCXX_RUNTIME="${stage2_libcxx}" \
+            -DOMVLL_LIBCXX_RUNTIME="${host_libcxx}" \
             -DOMVLL_ABI=CustomAndroid
           cmake --build "${tmp_dir}/plugin-build" --target OMVLL --parallel 4
 
@@ -309,11 +312,13 @@ jobs:
           fi
 
           rm -rf "${target_dir}"
-          runtime_dir="$(dirname "${stage2_libcxx}")"
           mkdir -p "${tmp_dir}/plugin-runtime"
-          find "${runtime_dir}" -maxdepth 1 \
-            \( -name 'libc++.so*' -o -name 'libc++abi.so*' -o -name 'libunwind.so*' \) \
-            -exec cp -L {} "${tmp_dir}/plugin-runtime/" \;
+          for runtime_name in libc++.so.1 libc++abi.so.1 libunwind.so.1; do
+            runtime_path="$(find /usr/lib -name "${runtime_name}" -print -quit)"
+            if [[ -n "${runtime_path}" ]]; then
+              cp -L "${runtime_path}" "${tmp_dir}/plugin-runtime/${runtime_name}"
+            fi
+          done
           mv "${stage2_dir}" "${target_dir}"
           cp "${tmp_dir}/plugin-build/libOMVLL.so" "${target_dir}/omvll-ndk.so"
           cp "${tmp_dir}"/plugin-runtime/* "${target_dir}/lib/"
@@ -334,7 +339,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: private-source/**/third_party/o-mvll/deps/LLVM21-NDK29-Linux
-          key: omvll-linux-deps-llvm21-ndk29-v5
+          key: omvll-linux-deps-llvm21-ndk29-v6
 
       - name: Set up JDK 17 for nested tools
         uses: actions/setup-java@v4
