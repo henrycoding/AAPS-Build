@@ -403,12 +403,23 @@ jobs:
             exit 1
           fi
 
+          install_sdk_package() {
+            local package_name="$1"
+            set +o pipefail
+            if ! yes | "${sdkmanager}" "${package_name}" >/dev/null; then
+              set -o pipefail
+              echo "Failed to install Android SDK package ${package_name}"
+              exit 1
+            fi
+            set -o pipefail
+          }
+
           if [[ ! -x "${sdk_root}/ndk/${project_ndk_version}/ndk-build" ]]; then
-            yes | "${sdkmanager}" "ndk;${project_ndk_version}" >/dev/null
+            install_sdk_package "ndk;${project_ndk_version}"
           fi
 
           if [[ ! -x "${sdk_root}/cmake/${project_cmake_version}/bin/cmake" ]]; then
-            yes | "${sdkmanager}" "cmake;${project_cmake_version}" >/dev/null
+            install_sdk_package "cmake;${project_cmake_version}"
           fi
 
           ndk_dir="${sdk_root}/ndk/${project_ndk_version}"
