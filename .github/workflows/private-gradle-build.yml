@@ -619,6 +619,27 @@ jobs:
             sed -i '/^LOCAL_MODULE[[:space:]]*:=/a LOCAL_SHORT_COMMANDS := true' "${android_mk}"
           fi
 
+      - name: Configure final protection to reuse the prebuilt shell
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          app_build="app/build.gradle.kts"
+          if [[ "$(grep -c '^[[:space:]]*\":packer:run\",$' "${app_build}")" -ne 1 ]]; then
+            echo "Expected one nested :packer:run command in ${app_build}"
+            exit 1
+          fi
+
+          perl -0pi -e 's/(\n[ \t]*)(":packer:run",)/$1"-x",$1":shell:exportShellDex",$1$2/' "${app_build}"
+
+          packer_command="$(grep -B 3 -A 2 '^[[:space:]]*\":packer:run\",$' "${app_build}")"
+          if ! grep -q '^[[:space:]]*"-x",$' <<<"${packer_command}" \
+            || ! grep -q '^[[:space:]]*":shell:exportShellDex",$' <<<"${packer_command}"; then
+            echo "Failed to configure final protection to reuse the prebuilt shell"
+            exit 1
+          fi
+
       - name: Prebuild release and protected shell in parallel
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
@@ -666,7 +687,7 @@ jobs:
           trap 'echo "Parallel prebuild received SIGTERM."; cleanup; exit 143' TERM INT
 
           echo "Preparing dex2c/VMP toolchains before parallel work."
-          if ! ./gradlew --no-daemon --console=plain --max-workers=3 \
+          if ! ./gradlew --daemon --console=plain --max-workers=3 \
             :app:syncProtectPackerConfig > "${prep_log}" 2>&1; then
             echo "Protection toolchain preparation failed."
             if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" ]]; then
@@ -676,13 +697,13 @@ jobs:
           fi
 
           echo "Building ${assemble_task} and the protected shell concurrently."
-          ./gradlew --no-daemon --console=plain --max-workers=3 \
+          ./gradlew --daemon --console=plain --max-workers=4 \
             "${assemble_task}" "${verify_task}" -x "${protect_task}" > "${app_log}" 2>&1 &
           app_pid="$!"
 
           (
             cd third_party/protectPacker
-            ./gradlew --no-daemon --console=plain --max-workers=2 \
+            ./gradlew --daemon --console=plain --max-workers=2 \
               -PshellDebugDump=false :shell:exportShellDex
           ) > "${shell_log}" 2>&1 &
           shell_pid="$!"
@@ -723,27 +744,6 @@ jobs:
           cleanup
           trap - EXIT TERM INT
           echo "Parallel app/shell prebuild completed."
-
-      - name: Reuse the verified prebuilt shell during final protection
-        shell: bash
-        working-directory: private-source/${{ inputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          app_build="app/build.gradle.kts"
-          if [[ "$(grep -c '^[[:space:]]*\":packer:run\",$' "${app_build}")" -ne 1 ]]; then
-            echo "Expected one nested :packer:run command in ${app_build}"
-            exit 1
-          fi
-
-          perl -0pi -e 's/(\n[ \t]*)(":packer:run",)/$1"-x",$1":shell:exportShellDex",$1$2/' "${app_build}"
-
-          packer_command="$(grep -B 3 -A 2 '^[[:space:]]*\":packer:run\",$' "${app_build}")"
-          if ! grep -q '^[[:space:]]*"-x",$' <<<"${packer_command}" \
-            || ! grep -q '^[[:space:]]*":shell:exportShellDex",$' <<<"${packer_command}"; then
-            echo "Failed to configure final protection to reuse the prebuilt shell"
-            exit 1
-          fi
 
       - name: Build without publishing public artifacts
         shell: bash
@@ -795,7 +795,7 @@ jobs:
           trap 'echo "Build step received SIGTERM."; show_build_log_tail; cleanup; exit 143' TERM INT
 
           set +e
-          ./gradlew --no-daemon --console=plain --max-workers=4 \
+          ./gradlew --daemon --console=plain --max-workers=4 \
             "${gradle_task}" \
             -x :app:prepareDex2cToolchain \
             -x :app:prepareNmmpToolchain > "${build_log}" 2>&1
