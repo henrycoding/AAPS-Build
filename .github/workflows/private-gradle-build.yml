@@ -57,12 +57,14 @@ permissions:
 
 concurrency:
   group: private-gradle-build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     name: Build private Gradle project
-    runs-on: ubuntu-latest
+    # Pin the runner image: ubuntu-latest (24.04) has intermittently sent
+    # unsolicited SIGTERM to this long native-protection step.
+    runs-on: ubuntu-22.04
     timeout-minutes: 120
 
     env:
