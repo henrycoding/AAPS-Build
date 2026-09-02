@@ -387,13 +387,14 @@ jobs:
           set -euo pipefail
           chmod +x ./gradlew
 
-      - name: Select Android NDK 29
+      - name: Select Android native toolchains
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
         run: |
           set -euo pipefail
 
           project_ndk_version="29.0.14206865"
+          project_cmake_version="3.22.1"
           sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           sdkmanager="${sdk_root}/cmdline-tools/latest/bin/sdkmanager"
 
@@ -406,9 +407,19 @@ jobs:
             yes | "${sdkmanager}" "ndk;${project_ndk_version}" >/dev/null
           fi
 
+          if [[ ! -x "${sdk_root}/cmake/${project_cmake_version}/bin/cmake" ]]; then
+            yes | "${sdkmanager}" "cmake;${project_cmake_version}" >/dev/null
+          fi
+
           ndk_dir="${sdk_root}/ndk/${project_ndk_version}"
           if [[ ! -x "${ndk_dir}/ndk-build" ]]; then
             echo "NDK ${project_ndk_version} was not installed at ${ndk_dir}"
+            exit 1
+          fi
+
+          cmake_bin="${sdk_root}/cmake/${project_cmake_version}/bin/cmake"
+          if [[ ! -x "${cmake_bin}" ]]; then
+            echo "CMake ${project_cmake_version} was not installed at ${cmake_bin}"
             exit 1
           fi
 
@@ -424,6 +435,7 @@ jobs:
           echo "ndk.dir=${ndk_dir}" >> local.properties
 
           echo "Selected Android NDK: ${ndk_dir}"
+          echo "Selected Android CMake: ${cmake_bin}"
 
       - name: Configure nested Gradle builds
         shell: bash
