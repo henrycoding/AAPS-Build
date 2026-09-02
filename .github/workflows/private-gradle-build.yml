@@ -619,6 +619,132 @@ jobs:
             sed -i '/^LOCAL_MODULE[[:space:]]*:=/a LOCAL_SHORT_COMMANDS := true' "${android_mk}"
           fi
 
+      - name: Prebuild release and protected shell in parallel
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          case "${FLAVOR}" in
+            full)
+              assemble_task=":app:assembleFullRelease"
+              protect_task=":app:protectPackerFullRelease"
+              verify_task=":app:verifyFullReleaseSettingsBridgeInjection"
+              ;;
+            mednovo)
+              assemble_task=":app:assembleMednovoRelease"
+              protect_task=":app:protectPackerMednovoRelease"
+              verify_task=":app:verifyMednovoReleaseSettingsBridgeInjection"
+              ;;
+            *)
+              echo "Unsupported flavor: ${FLAVOR}"
+              exit 1
+              ;;
+          esac
+
+          prep_log="${RUNNER_TEMP}/gradle-protection-prep.log"
+          app_log="${RUNNER_TEMP}/gradle-app-prebuild.log"
+          shell_log="${RUNNER_TEMP}/gradle-shell-prebuild.log"
+
+          cleanup() {
+            for pid in "${app_pid:-}" "${shell_pid:-}" "${heartbeat_pid:-}"; do
+              if [[ -n "${pid}" ]]; then
+                kill "${pid}" >/dev/null 2>&1 || true
+                wait "${pid}" >/dev/null 2>&1 || true
+              fi
+            done
+          }
+
+          (
+            while true; do
+              sleep 60
+              echo "Parallel app/shell prebuild is still running..."
+            done
+          ) &
+          heartbeat_pid="$!"
+          trap cleanup EXIT
+          trap 'echo "Parallel prebuild received SIGTERM."; cleanup; exit 143' TERM INT
+
+          echo "Preparing dex2c/VMP toolchains before parallel work."
+          if ! ./gradlew --no-daemon --console=plain --max-workers=3 \
+            :app:syncProtectPackerConfig > "${prep_log}" 2>&1; then
+            echo "Protection toolchain preparation failed."
+            if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" ]]; then
+              tail -n 500 "${prep_log}"
+            fi
+            exit 1
+          fi
+
+          echo "Building ${assemble_task} and the protected shell concurrently."
+          ./gradlew --no-daemon --console=plain --max-workers=3 \
+            "${assemble_task}" "${verify_task}" -x "${protect_task}" > "${app_log}" 2>&1 &
+          app_pid="$!"
+
+          (
+            cd third_party/protectPacker
+            ./gradlew --no-daemon --console=plain --max-workers=2 \
+              -PshellDebugDump=false :shell:exportShellDex
+          ) > "${shell_log}" 2>&1 &
+          shell_pid="$!"
+
+          set +e
+          wait "${app_pid}"
+          app_status="$?"
+          wait "${shell_pid}"
+          shell_status="$?"
+          set -e
+
+          if [[ "${app_status}" -ne 0 || "${shell_status}" -ne 0 ]]; then
+            echo "Parallel prebuild failed (app=${app_status}, shell=${shell_status})."
+            if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" ]]; then
+              echo "App prebuild tail:"
+              tail -n 500 "${app_log}"
+              echo "Protected shell prebuild tail:"
+              tail -n 500 "${shell_log}"
+            fi
+            exit 1
+          fi
+
+          for required_path in \
+            app/protect-packer.runtime.toml \
+            third_party/nmmp/nmm-protect/build/libs/tools/config.json \
+            third_party/protectPacker/shell/build/exported-shell/classes.dex \
+            third_party/protectPacker/shell/build/exported-shell/lib/arm64-v8a/libandroidx.graphics.path.so; do
+            if [[ ! -s "${required_path}" ]]; then
+              echo "Parallel prebuild did not produce ${required_path}"
+              exit 1
+            fi
+          done
+          if ! find third_party/nmmp/nmm-protect/build/libs -maxdepth 1 \
+            -type f -name 'vm-protect-*.jar' -print -quit | grep -q .; then
+            echo "Parallel prebuild did not produce the nmmp vm-protect jar"
+            exit 1
+          fi
+          cleanup
+          trap - EXIT TERM INT
+          echo "Parallel app/shell prebuild completed."
+
+      - name: Reuse the verified prebuilt shell during final protection
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          app_build="app/build.gradle.kts"
+          if [[ "$(grep -c '^[[:space:]]*\":packer:run\",$' "${app_build}")" -ne 1 ]]; then
+            echo "Expected one nested :packer:run command in ${app_build}"
+            exit 1
+          fi
+
+          perl -0pi -e 's/(\n[ \t]*)(":packer:run",)/$1"-x",$1":shell:exportShellDex",$1$2/' "${app_build}"
+
+          packer_command="$(grep -B 3 -A 2 '^[[:space:]]*\":packer:run\",$' "${app_build}")"
+          if ! grep -q '^[[:space:]]*"-x",$' <<<"${packer_command}" \
+            || ! grep -q '^[[:space:]]*":shell:exportShellDex",$' <<<"${packer_command}"; then
+            echo "Failed to configure final protection to reuse the prebuilt shell"
+            exit 1
+          fi
+
       - name: Build without publishing public artifacts
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
@@ -669,7 +795,10 @@ jobs:
           trap 'echo "Build step received SIGTERM."; show_build_log_tail; cleanup; exit 143' TERM INT
 
           set +e
-          ./gradlew --no-daemon --console=plain --max-workers=4 "${gradle_task}" > "${build_log}" 2>&1
+          ./gradlew --no-daemon --console=plain --max-workers=4 \
+            "${gradle_task}" \
+            -x :app:prepareDex2cToolchain \
+            -x :app:prepareNmmpToolchain > "${build_log}" 2>&1
           gradle_status="$?"
           set -e
 
@@ -683,6 +812,19 @@ jobs:
             show_build_log_tail
             exit 1
           fi
+
+      - name: Verify protected APK output
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          apk_path="app/${FLAVOR}/app-${FLAVOR}-release-protected.apk"
+          if [[ ! -s "${apk_path}" ]]; then
+            echo "Protected APK not found at ${apk_path}"
+            exit 1
+          fi
+          echo "Verified protected APK: ${apk_path}"
 
       - name: Upload APK draft to Odoo AAPS update manager
         if: ${{ inputs.upload_to_odoo == 'true' }}
