@@ -649,12 +649,28 @@ jobs:
           set -euo pipefail
 
           app_build="app/build.gradle.kts"
+          build_version_pattern='return dateFormat.format(Date())'
+          if [[ "$(grep -Fxc "    ${build_version_pattern}" "${app_build}")" -ne 1 ]]; then
+            echo "Expected one generated build version return in ${app_build}"
+            exit 1
+          fi
           if [[ "$(grep -c '^[[:space:]]*\":packer:run\",$' "${app_build}")" -ne 1 ]]; then
             echo "Expected one nested :packer:run command in ${app_build}"
             exit 1
           fi
 
+          sed -i \
+            's/return dateFormat\.format(Date())/return System.getenv("AAPS_CI_BUILD_VERSION")?.takeIf { it.isNotBlank() } ?: dateFormat.format(Date())/' \
+            "${app_build}"
           perl -0pi -e 's/(\n[ \t]*)(":packer:run",)/$1"-x",$1":shell:exportShellDex",$1$2/' "${app_build}"
+
+          ci_build_version="$(date -u +%y%m%d%H%M)"
+          echo "AAPS_CI_BUILD_VERSION=${ci_build_version}" >> "${GITHUB_ENV}"
+
+          if ! grep -Fq 'System.getenv("AAPS_CI_BUILD_VERSION")?.takeIf' "${app_build}"; then
+            echo "Failed to configure a stable CI build version"
+            exit 1
+          fi
 
           packer_command="$(grep -B 3 -A 2 '^[[:space:]]*\":packer:run\",$' "${app_build}")"
           if ! grep -q '^[[:space:]]*"-x",$' <<<"${packer_command}" \
@@ -662,6 +678,7 @@ jobs:
             echo "Failed to configure final protection to reuse the prebuilt shell"
             exit 1
           fi
+          echo "Selected stable CI build version: ${ci_build_version}"
 
       - name: Prebuild release and protected shell in parallel
         shell: bash
