@@ -62,9 +62,8 @@ concurrency:
 jobs:
   build:
     name: Build private Gradle project
-    # Pin the runner image: ubuntu-latest (24.04) has intermittently sent
-    # unsolicited SIGTERM to this long native-protection step.
-    runs-on: ubuntu-22.04
+    # O-MVLL 1.9 Linux binaries require the Ubuntu 24 runtime libraries.
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     env:
