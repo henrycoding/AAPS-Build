@@ -728,6 +728,8 @@ jobs:
 
           echo "Preparing dex2c/VMP toolchains before parallel work."
           if ! ./gradlew --daemon --console=plain --max-workers=3 \
+            -Dorg.gradle.jvmargs="-Xmx5120m -XX:MaxMetaspaceSize=1g" \
+            -Dkotlin.daemon.jvm.options="-Xmx2048m" \
             :app:syncProtectPackerConfig > "${prep_log}" 2>&1; then
             echo "Protection toolchain preparation failed."
             if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" ]]; then
@@ -737,13 +739,17 @@ jobs:
           fi
 
           echo "Building ${assemble_task} and the protected shell concurrently."
-          ./gradlew --daemon --console=plain --max-workers=4 \
+          ./gradlew --daemon --console=plain --max-workers=3 \
+            -Dorg.gradle.jvmargs="-Xmx5120m -XX:MaxMetaspaceSize=1g" \
+            -Dkotlin.daemon.jvm.options="-Xmx2048m" \
             "${assemble_task}" "${verify_task}" -x "${protect_task}" > "${app_log}" 2>&1 &
           app_pid="$!"
 
           (
             cd third_party/protectPacker
             ./gradlew --daemon --console=plain --max-workers=2 \
+              -Dorg.gradle.jvmargs="-Xmx5120m -XX:MaxMetaspaceSize=1g" \
+              -Dkotlin.daemon.jvm.options="-Xmx2048m" \
               -PshellDebugDump=false :shell:exportShellDex
           ) > "${shell_log}" 2>&1 &
           shell_pid="$!"
@@ -849,7 +855,9 @@ jobs:
           trap 'cleanup; echo "Build step received SIGTERM at $(date -u +%H:%M:%S)Z."; echo "=== runner diagnostics ==="; free -m; echo "--- cgroup v2 memory.max/current ---"; paste -d" " /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current 2>/dev/null || true; echo "--- memory pressure (PSI) ---"; cat /proc/pressure/memory 2>/dev/null || true; echo "--- top memory processes ---"; ps -eo rss,comm --sort=-rss --no-headers | head -8; echo "--- dmesg tail ---"; (dmesg 2>/dev/null || sudo dmesg 2>/dev/null || echo "(dmesg unavailable)") | tail -40; show_build_log_tail; exit 143' TERM INT
 
           set +e
-          ./gradlew --daemon --console=plain --max-workers=4 \
+          ./gradlew --daemon --console=plain --max-workers=3 \
+            -Dorg.gradle.jvmargs="-Xmx5120m -XX:MaxMetaspaceSize=1g" \
+            -Dkotlin.daemon.jvm.options="-Xmx2048m" \
             "${gradle_task}" \
             -x :app:prepareDex2cToolchain \
             -x :app:prepareNmmpToolchain > "${build_log}" 2>&1
