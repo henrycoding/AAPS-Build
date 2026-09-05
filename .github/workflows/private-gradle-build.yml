@@ -824,15 +824,29 @@ jobs:
           }
 
           (
+            iter=0
+            last_line=""
             while true; do
-              sleep 60
-              echo "Gradle build is still running..."
+              sleep 30
+              iter=$((iter+1))
+              now="$(date -u +%H:%M:%S)"
+              mem="$(free -m | awk '/Mem:/{print $3"/"$2 "MB"}')"
+              swap="$(free -m | awk '/Swap:/{print $3"/"$2 "MB"}')"
+              load="$(cut -d' ' -f1 /proc/loadavg)"
+              disk="$(df -h "$RUNNER_TEMP" | awk 'NR==2{print $3"/"$2 "("$5")"}')"
+              java="$(ps -C java -o %cpu,rss --no-headers 2>/dev/null | awk '{c+=$1;r+=$2} END{if(c>0||r>0){printf "%d%% %.0fMB", c, r/1024}else{print "none"}}')"
+              echo "[probe ${iter}] ${now} mem=${mem} swap=${swap} load=${load} disk=${disk} java-cpu/ram=${java}"
+              cur="$(tail -n 1 "${build_log}" 2>/dev/null)"
+              if [[ -n "${cur}" && "${cur}" != "${last_line}" ]]; then
+                echo "  gradle: ${cur}"
+                last_line="${cur}"
+              fi
             done
           ) &
           heartbeat_pid="$!"
 
           trap cleanup EXIT
-          trap 'echo "Build step received SIGTERM."; show_build_log_tail; cleanup; exit 143' TERM INT
+          trap 'cleanup; echo "Build step received SIGTERM at $(date -u +%H:%M:%S)Z."; echo "=== runner diagnostics ==="; free -m; echo "--- cgroup v2 memory.max/current ---"; paste -d" " /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current 2>/dev/null || true; echo "--- memory pressure (PSI) ---"; cat /proc/pressure/memory 2>/dev/null || true; echo "--- top memory processes ---"; ps -eo rss,comm --sort=-rss --no-headers | head -8; echo "--- dmesg tail ---"; (dmesg 2>/dev/null || sudo dmesg 2>/dev/null || echo "(dmesg unavailable)") | tail -40; show_build_log_tail; exit 143' TERM INT
 
           set +e
           ./gradlew --daemon --console=plain --max-workers=4 \
