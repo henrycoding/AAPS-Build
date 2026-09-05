@@ -63,7 +63,7 @@ jobs:
   build:
     name: Build private Gradle project
     # O-MVLL 1.9 Linux binaries require the Ubuntu 24 runtime libraries.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-8core
     timeout-minutes: 120
 
     env:
