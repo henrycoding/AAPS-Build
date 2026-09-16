@@ -74,6 +74,10 @@ jobs:
       CHANGELOG: ${{ inputs.changelog }}
       FORCE_UPDATE: ${{ inputs.force_update }}
       SHOW_FAILURE_LOG_TAIL: ${{ inputs.show_failure_log_tail }}
+      # Bounds also apply to java -jar tools launched outside Gradle. Explicit
+      # Gradle JVM arguments below override this default for the build JVM.
+      JAVA_TOOL_OPTIONS: -Xmx1536m -XX:ActiveProcessorCount=2
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
 
     steps:
       - name: Validate required secrets
@@ -448,14 +452,29 @@ jobs:
           echo "Selected Android NDK: ${ndk_dir}"
           echo "Selected Android CMake: ${cmake_bin}"
 
-      - name: Configure nested Gradle builds
+      - name: Bound nested Gradle and tool memory
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p ~/.gradle
+          # User-home properties take precedence over vendored project defaults
+          # and reach nested wrappers which do not receive our command-line flags.
+          cat >> ~/.gradle/gradle.properties <<'PROPERTIES'
+          org.gradle.daemon=false
+          org.gradle.parallel=false
+          org.gradle.workers.max=2
+          org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8
+          kotlin.compiler.execution.strategy=in-process
+          kotlin.daemon.jvmargs=-Xmx1024m
+          PROPERTIES
           cat >> ~/.gradle/init.gradle <<'GRADLE'
           gradle.projectsEvaluated {
+              allprojects {
+                  tasks.withType(org.gradle.api.tasks.JavaExec).configureEach {
+                      maxHeapSize = '1536m'
+                  }
+              }
               if (rootProject.name == 'nmm-protect') {
                   allprojects {
                       tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
@@ -680,7 +699,7 @@ jobs:
           fi
           echo "Selected stable CI build version: ${ci_build_version}"
 
-      - name: Prebuild release and protected shell in parallel
+      - name: Prebuild release and protected shell sequentially
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
         run: |
@@ -708,28 +727,26 @@ jobs:
           shell_log="${RUNNER_TEMP}/gradle-shell-prebuild.log"
 
           cleanup() {
-            for pid in "${app_pid:-}" "${shell_pid:-}" "${heartbeat_pid:-}"; do
-              if [[ -n "${pid}" ]]; then
-                kill "${pid}" >/dev/null 2>&1 || true
-                wait "${pid}" >/dev/null 2>&1 || true
-              fi
-            done
+            if [[ -n "${heartbeat_pid:-}" ]]; then
+              kill "${heartbeat_pid}" >/dev/null 2>&1 || true
+              wait "${heartbeat_pid}" >/dev/null 2>&1 || true
+            fi
           }
 
           (
             while true; do
               sleep 60
-              echo "Parallel app/shell prebuild is still running..."
+              echo "Sequential app/shell prebuild is still running..."
             done
           ) &
           heartbeat_pid="$!"
           trap cleanup EXIT
-          trap 'echo "Parallel prebuild received SIGTERM."; cleanup; exit 143' TERM INT
+          trap 'echo "Sequential prebuild received SIGTERM."; cleanup; exit 143' TERM INT
 
-          echo "Preparing dex2c/VMP toolchains before parallel work."
-          if ! ./gradlew --daemon --console=plain --max-workers=3 \
-            -Dorg.gradle.jvmargs="-Xmx5120m -XX:MaxMetaspaceSize=1g" \
-            -Dkotlin.daemon.jvm.options="-Xmx2048m" \
+          echo "Preparing dex2c/VMP toolchains."
+          if ! ./gradlew --no-daemon --no-parallel --console=plain --max-workers=2 \
+            -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2" \
+            -Pkotlin.compiler.execution.strategy=in-process \
             :app:syncProtectPackerConfig > "${prep_log}" 2>&1; then
             echo "Protection toolchain preparation failed."
             if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" ]]; then
@@ -738,35 +755,27 @@ jobs:
             exit 1
           fi
 
-          echo "Building ${assemble_task} and the protected shell concurrently."
-          ./gradlew --daemon --console=plain --max-workers=3 \
-            -Dorg.gradle.jvmargs="-Xmx5120m -XX:MaxMetaspaceSize=1g" \
-            -Dkotlin.daemon.jvm.options="-Xmx2048m" \
-            "${assemble_task}" "${verify_task}" -x "${protect_task}" > "${app_log}" 2>&1 &
-          app_pid="$!"
-
-          (
-            cd third_party/protectPacker
-            ./gradlew --daemon --console=plain --max-workers=2 \
-              -Dorg.gradle.jvmargs="-Xmx5120m -XX:MaxMetaspaceSize=1g" \
-              -Dkotlin.daemon.jvm.options="-Xmx2048m" \
-              -PshellDebugDump=false :shell:exportShellDex
-          ) > "${shell_log}" 2>&1 &
-          shell_pid="$!"
-
-          set +e
-          wait "${app_pid}"
-          app_status="$?"
-          wait "${shell_pid}"
-          shell_status="$?"
-          set -e
-
-          if [[ "${app_status}" -ne 0 || "${shell_status}" -ne 0 ]]; then
-            echo "Parallel prebuild failed (app=${app_status}, shell=${shell_status})."
+          echo "Building ${assemble_task} before the protected shell."
+          if ! ./gradlew --no-daemon --no-parallel --console=plain --max-workers=2 \
+            -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2" \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            "${assemble_task}" "${verify_task}" -x "${protect_task}" > "${app_log}" 2>&1; then
+            echo "App prebuild failed."
             if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" ]]; then
-              echo "App prebuild tail:"
               tail -n 500 "${app_log}"
-              echo "Protected shell prebuild tail:"
+            fi
+            exit 1
+          fi
+
+          if ! (
+            cd third_party/protectPacker
+            ./gradlew --no-daemon --no-parallel --console=plain --max-workers=2 \
+              -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2" \
+              -Pkotlin.compiler.execution.strategy=in-process \
+              -PshellDebugDump=false :shell:exportShellDex
+          ) > "${shell_log}" 2>&1; then
+            echo "Protected shell prebuild failed."
+            if [[ "${SHOW_FAILURE_LOG_TAIL}" == "true" ]]; then
               tail -n 500 "${shell_log}"
             fi
             exit 1
@@ -778,18 +787,31 @@ jobs:
             third_party/protectPacker/shell/build/exported-shell/classes.dex \
             third_party/protectPacker/shell/build/exported-shell/lib/arm64-v8a/libandroidx.graphics.path.so; do
             if [[ ! -s "${required_path}" ]]; then
-              echo "Parallel prebuild did not produce ${required_path}"
+              echo "Sequential prebuild did not produce ${required_path}"
               exit 1
             fi
           done
           if ! find third_party/nmmp/nmm-protect/build/libs -maxdepth 1 \
             -type f -name 'vm-protect-*.jar' -print -quit | grep -q .; then
-            echo "Parallel prebuild did not produce the nmmp vm-protect jar"
+            echo "Sequential prebuild did not produce the nmmp vm-protect jar"
             exit 1
           fi
           cleanup
           trap - EXIT TERM INT
-          echo "Parallel app/shell prebuild completed."
+          echo "Sequential app/shell prebuild completed."
+
+      - name: Release prebuild daemons before final protection
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+          # Stop by wrapper/version, including the Java 17 nested tool build.
+          # Do not kill arbitrary Java processes or the runner itself.
+          ./gradlew --stop
+          (cd third_party/protectPacker && ./gradlew --stop)
+          (cd third_party/nmmp/nmm-protect && JAVA_HOME="${JAVA_HOME_17_X64}" ./gradlew --stop)
+          echo "Memory available before final protection:"
+          free -m
 
       - name: Build without publishing public artifacts
         shell: bash
@@ -855,9 +877,9 @@ jobs:
           trap 'cleanup; echo "Build step received SIGTERM at $(date -u +%H:%M:%S)Z."; echo "=== runner diagnostics ==="; free -m; echo "--- cgroup v2 memory.max/current ---"; paste -d" " /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current 2>/dev/null || true; echo "--- memory pressure (PSI) ---"; cat /proc/pressure/memory 2>/dev/null || true; echo "--- top memory processes ---"; ps -eo rss,comm --sort=-rss --no-headers | head -8; echo "--- dmesg tail ---"; (dmesg 2>/dev/null || sudo dmesg 2>/dev/null || echo "(dmesg unavailable)") | tail -40; show_build_log_tail; exit 143' TERM INT
 
           set +e
-          ./gradlew --daemon --console=plain --max-workers=3 \
-            -Dorg.gradle.jvmargs="-Xmx5120m -XX:MaxMetaspaceSize=1g" \
-            -Dkotlin.daemon.jvm.options="-Xmx2048m" \
+          ./gradlew --no-daemon --no-parallel --console=plain --max-workers=2 \
+            -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2" \
+            -Pkotlin.compiler.execution.strategy=in-process \
             "${gradle_task}" \
             -x :app:prepareDex2cToolchain \
             -x :app:prepareNmmpToolchain > "${build_log}" 2>&1
