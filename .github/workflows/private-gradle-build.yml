@@ -673,15 +673,31 @@ jobs:
             echo "Expected one generated build version return in ${app_build}"
             exit 1
           fi
-          if [[ "$(grep -c '^[[:space:]]*\":packer:run\",$' "${app_build}")" -ne 1 ]]; then
-            echo "Expected one nested :packer:run command in ${app_build}"
+          legacy_packer_count="$(grep -c '^[[:space:]]*\":packer:run\",$' "${app_build}" || true)"
+          if [[ "${legacy_packer_count}" -eq 1 ]]; then
+            packer_mode="legacy"
+          elif [[ "${legacy_packer_count}" -eq 0 ]] \
+            && grep -Fq 'gradle.includedBuild("protectPacker").task(":packer:installDist")' "${app_build}" \
+            && grep -Fq 'protectPackerRoot.file("packer/build/install/packer/bin/packer")' "${app_build}"; then
+            packer_mode="cli"
+          else
+            echo "Unsupported packer invocation in ${app_build}"
             exit 1
           fi
 
           sed -i \
             's/return dateFormat\.format(Date())/return System.getenv("AAPS_CI_BUILD_VERSION")?.takeIf { it.isNotBlank() } ?: dateFormat.format(Date())/' \
             "${app_build}"
-          perl -0pi -e 's/(\n[ \t]*)(":packer:run",)/$1"-x",$1":shell:exportShellDex",$1$2/' "${app_build}"
+          if [[ "${packer_mode}" == "legacy" ]]; then
+            perl -0pi -e 's/(\n[ \t]*)(":packer:run",)/$1"-x",$1":shell:exportShellDex",$1$2/' "${app_build}"
+            packer_command="$(grep -B 3 -A 2 '^[[:space:]]*\":packer:run\",$' "${app_build}")"
+            if ! grep -q '^[[:space:]]*"-x",$' <<<"${packer_command}" \
+              || ! grep -q '^[[:space:]]*":shell:exportShellDex",$' <<<"${packer_command}"; then
+              echo "Failed to configure final protection to reuse the prebuilt shell"
+              exit 1
+            fi
+          fi
+          echo "AAPS_PACKER_MODE=${packer_mode}" >> "${GITHUB_ENV}"
 
           ci_build_version="$(date -u +%y%m%d%H%M)"
           echo "AAPS_CI_BUILD_VERSION=${ci_build_version}" >> "${GITHUB_ENV}"
@@ -691,12 +707,7 @@ jobs:
             exit 1
           fi
 
-          packer_command="$(grep -B 3 -A 2 '^[[:space:]]*\":packer:run\",$' "${app_build}")"
-          if ! grep -q '^[[:space:]]*"-x",$' <<<"${packer_command}" \
-            || ! grep -q '^[[:space:]]*":shell:exportShellDex",$' <<<"${packer_command}"; then
-            echo "Failed to configure final protection to reuse the prebuilt shell"
-            exit 1
-          fi
+          echo "Selected packer invocation: ${packer_mode}"
           echo "Selected stable CI build version: ${ci_build_version}"
 
       - name: Prebuild release and protected shell sequentially
@@ -876,13 +887,19 @@ jobs:
           trap cleanup EXIT
           trap 'cleanup; echo "Build step received SIGTERM at $(date -u +%H:%M:%S)Z."; echo "=== runner diagnostics ==="; free -m; echo "--- cgroup v2 memory.max/current ---"; paste -d" " /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current 2>/dev/null || true; echo "--- memory pressure (PSI) ---"; cat /proc/pressure/memory 2>/dev/null || true; echo "--- top memory processes ---"; ps -eo rss,comm --sort=-rss --no-headers | head -8; echo "--- dmesg tail ---"; (dmesg 2>/dev/null || sudo dmesg 2>/dev/null || echo "(dmesg unavailable)") | tail -40; show_build_log_tail; exit 143' TERM INT
 
+          protection_args=(-x :app:prepareDex2cToolchain -x :app:prepareNmmpToolchain)
+          if [[ "${AAPS_PACKER_MODE:-legacy}" == "cli" ]]; then
+            # The sequential prebuild already produced and checked this shell.
+            # installDist must package it without rerunning the composite-build exporter.
+            protection_args+=(-x :protectPacker:shell:exportShellDex)
+          fi
+
           set +e
           ./gradlew --no-daemon --no-parallel --console=plain --max-workers=2 \
             -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2" \
             -Pkotlin.compiler.execution.strategy=in-process \
             "${gradle_task}" \
-            -x :app:prepareDex2cToolchain \
-            -x :app:prepareNmmpToolchain > "${build_log}" 2>&1
+            "${protection_args[@]}" > "${build_log}" 2>&1
           gradle_status="$?"
           set -e
 

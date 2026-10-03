@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -68,10 +69,16 @@ class WorkflowTest(unittest.TestCase):
         free = bin_dir / "free"
         free.write_text("#!/bin/sh\nprintf 'test memory snapshot\\n'\n")
         free.chmod(0o755)
+        if sys.platform == "darwin":
+            # The workflow runs GNU sed; adapt its in-place syntax for local BSD sed.
+            sed = bin_dir / "sed"
+            sed.write_text('#!/bin/sh\nif [ "$1" = "-i" ]; then shift; exec /usr/bin/sed -i "" "$@"; fi\nexec /usr/bin/sed "$@"\n')
+            sed.chmod(0o755)
         self.env = {
             **os.environ, "SOURCE_ROOT": str(self.root), "RUNNER_TEMP": str(self.root),
             "BUILD_TRACE": str(self.trace), "FLAVOR": "full", "SHOW_FAILURE_LOG_TAIL": "false",
             "JAVA_HOME_17_X64": "/test/jdk17",
+            "GITHUB_ENV": str(self.root / "github-env"),
             "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
         }
 
@@ -160,6 +167,54 @@ class WorkflowTest(unittest.TestCase):
         self.assertLess(names.index("Release prebuild daemons before final protection"),
                         names.index("Build without publishing public artifacts"))
         self.assertEqual(DOCUMENT["jobs"]["build"]["env"]["CMAKE_BUILD_PARALLEL_LEVEL"], "2")
+
+    def configure_packer(self, invocation):
+        app_build = self.root / "app/build.gradle.kts"
+        app_build.parent.mkdir(exist_ok=True)
+        app_build.write_text('fun generateBuildVersion(): String {\n    return dateFormat.format(Date())\n}\n' + invocation)
+        result = self.run_step("Configure final protection to reuse the prebuilt shell")
+        return result, app_build.read_text()
+
+    def test_cli_packer_is_accepted_without_restoring_nested_gradle(self):
+        result, patched = self.configure_packer(
+            'dependsOn(gradle.includedBuild("protectPacker").task(":packer:installDist"))\n'
+            'commandLine(protectPackerRoot.file("packer/build/install/packer/bin/packer").asFile.absolutePath)\n'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(':packer:run', patched)
+        self.assertNotIn(':shell:exportShellDex', patched)
+        self.assertIn('System.getenv("AAPS_CI_BUILD_VERSION")', patched)
+        self.assertIn('AAPS_PACKER_MODE=cli', (self.root / "github-env").read_text())
+
+    def test_legacy_packer_keeps_prebuilt_shell_exclusion(self):
+        result, patched = self.configure_packer('commandLine(\n    ":packer:run",\n)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"-x",\n    ":shell:exportShellDex",\n    ":packer:run",', patched)
+        self.assertIn('AAPS_PACKER_MODE=legacy', (self.root / "github-env").read_text())
+
+    def test_unknown_or_incomplete_packer_invocations_are_rejected(self):
+        for invocation in ('commandLine("unknown")',
+                           'dependsOn(gradle.includedBuild("protectPacker").task(":packer:installDist"))',
+                           'commandLine(protectPackerRoot.file("packer/build/install/packer/bin/packer"))',
+                           '    ":packer:run",\n    ":packer:run",\n'):
+            with self.subTest(invocation=invocation):
+                result, _ = self.configure_packer(invocation)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Unsupported packer invocation', result.stdout)
+
+    def test_final_build_reuses_shell_only_for_cli_mode(self):
+        for mode in ('cli', 'legacy'):
+            with self.subTest(mode=mode):
+                if self.trace.exists():
+                    self.trace.unlink()
+                result = self.run_step("Build without publishing public artifacts",
+                                       AAPS_PACKER_MODE=mode, GRADLE_TASK_INPUT="")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                args = self.events()[0]['args']
+                self.assertIn(':app:assembleFullRelease', args)
+                self.assertEqual(':protectPacker:shell:exportShellDex' in args, mode == 'cli')
+                self.assertNotIn(':app:protectPackerFullRelease', args)
+                self.assertNotIn(':packer:installDist', args)
 
 
 if __name__ == "__main__":

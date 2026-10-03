@@ -22,6 +22,12 @@ aggregate memory guarantee. Protection, signing, and APK verification remain
 enabled. Sequential phases may take longer; validate peak memory and completion
 on the next hosted run before increasing concurrency.
 
+Both the legacy nested `:packer:run` invocation and the current included-build
+`installDist` plus packer CLI are supported. For the CLI path, final protection
+excludes only `:protectPacker:shell:exportShellDex` after the sequential prebuild
+has checked the protected shell outputs. The distribution still packages those
+outputs and runs the complete APK protection and signing stages.
+
 ## Workflow regression tests
 
 ```sh
