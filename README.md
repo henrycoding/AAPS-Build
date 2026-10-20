@@ -79,3 +79,19 @@ Tests parse the workflow, syntax-check every shell step, and execute prebuild
 scripts with fake Gradle wrappers to check sequencing, both flavors, failure
 propagation, artifact checks, log privacy, and daemon cleanup. They do not compile
 or protect a real APK.
+
+## Exact APK retest
+
+An Android `am start -W` timeout remains pending until the same process has a
+focused app window and rendered frames, with a 120-second readiness deadline.
+A stalled, dead or restarted process is rejected before Monkey begins. Cloud
+controls cover a 12-second healthy startup and a deliberately hung startup.
+
+For a gate-only correction, `retest_run` and `retest_apk_sha256` select an existing
+failed build's unchanged signed APK. The mutually exclusive retest job requires
+successful original protected-output verification, a failed original Monkey gate,
+a skipped original Odoo upload, matching source/flavor and original gate SHA-256,
+a valid APK signature, and the same mandatory controls/Monkey/upload gate.
+A temporary encrypted draft-release asset transfers those bytes, using a separate
+disposable retest key in a repository secret. The operator diagnostic private key
+never enters CI. Remove the temporary release and secret after retesting.

@@ -81,6 +81,18 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('encrypt_monkey_diagnostics.py', encrypted)
         self.assertIn('--certificate', encrypted)
 
+    def test_retest_uses_identical_cloud_gate_and_upload_with_exclusive_job(self):
+        self.assertEqual("${{ inputs.retest_run == '' }}", DOCUMENT['jobs']['build']['if'])
+        retest = DOCUMENT['jobs']['retest']
+        self.assertEqual("${{ inputs.retest_run != '' }}", retest['if'])
+        self.assertEqual('monkey_controls', retest['needs'])
+        shared = next(i for i, step in enumerate(STEPS) if step['name'] == 'Prepare Google Play cloud emulator')
+        self.assertEqual(STEPS[shared:], retest['steps'][2:])
+        recovery = retest['steps'][1]['run']
+        self.assertIn('validate_retest_source.py', recovery)
+        self.assertIn('"${signer}" verify', recovery)
+        self.assertNotIn('diagnostics.key', recovery)
+
     def test_failed_missing_or_stale_monkey_result_never_reaches_odoo(self):
         import hashlib
         import shutil
@@ -95,7 +107,7 @@ class WorkflowTest(unittest.TestCase):
         curl.chmod(0o755)
         marker = self.root / 'uploaded'
         record = {'status': 'passed', 'apk_sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
-                  'coverage': 'unauthenticated_startup_ui', 'events_requested': 1000, 'events_injected': 1000,
+                  'coverage': 'unauthenticated_startup_ui', 'startup_ui_ready': True, 'events_requested': 1000, 'events_injected': 1000,
                   'process_stable': True, 'crash_or_anr_detected': False, 'monkey_aborted': False, 'monkey_exit_code': 0}
         result_file = self.root / 'monkey-result.json'
         for patch in (None, {'status': 'failed'}, {'apk_sha256': 'stale'}, {'events_injected': 999}, {}):

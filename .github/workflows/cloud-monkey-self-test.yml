@@ -35,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          for mode in healthy crash anr; do
+          for mode in healthy crash anr startup_hang; do
             mkdir "${RUNNER_TEMP}/monkey-controls/result-${mode}"
             result="${RUNNER_TEMP}/monkey-controls/result-${mode}/result.json"
             rc=0
@@ -56,6 +56,8 @@ jobs:
           r=json.loads(Path(path).read_text())
           if mode=='healthy':
               assert int(rc)==0 and r['status']=='passed' and r['events_injected']==1000,r
+          elif mode=='startup_hang':
+              assert int(rc)!=0 and r['status']=='failed' and r.get('reason')=='startup_ui_not_ready',r
           else:
               assert int(rc)!=0 and r['status']=='failed' and r.get('crash_or_anr_detected') is True,r
           print('Cloud control verified: '+mode)
@@ -68,4 +70,4 @@ jobs:
             echo 'Replacement APK incorrectly admitted.'
             exit 1
           fi
-          echo 'Cloud controls: healthy 1000 events passed; intentional crash/ANR and APK replacement blocked.' >> "${GITHUB_STEP_SUMMARY}"
+          echo 'Cloud controls: slow-start healthy 1000 events passed; intentional crash/ANR, hung startup and APK replacement blocked.' >> "${GITHUB_STEP_SUMMARY}"

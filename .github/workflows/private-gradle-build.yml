@@ -43,6 +43,14 @@ on:
           - "false"
           - "true"
         default: "false"
+      retest_run:
+        description: Optional failed build run whose exact encrypted APK is being retested
+        required: false
+        default: ""
+      retest_apk_sha256:
+        description: Original protected APK SHA-256, required with retest_run
+        required: false
+        default: ""
       show_failure_log_tail:
         description: Print the last build log lines on failure. This may expose private paths or source snippets.
         required: true
@@ -54,6 +62,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: private-gradle-build-${{ github.workflow }}-${{ github.ref }}
@@ -65,6 +74,7 @@ jobs:
     uses: ./.github/workflows/cloud-monkey-self-test.yml
 
   build:
+    if: ${{ inputs.retest_run == '' }}
     name: Build private Gradle project
     needs: monkey_controls
     # O-MVLL 1.9 Linux binaries require the Ubuntu 24 runtime libraries.
@@ -938,6 +948,152 @@ jobs:
           fi
           echo "Verified protected APK: ${apk_path}"
 
+      - name: Prepare Google Play cloud emulator
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager="${sdk_root}/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -c /dev/kvm ]]; then
+            echo "Cloud emulator requires KVM; Odoo upload is blocked."
+            exit 1
+          fi
+          sudo chmod a+rw /dev/kvm
+          # This genuine user/release-key image supports ARM translation. Do not
+          # use root, writable-system, property spoofing, or a weakened APK.
+          set +o pipefail
+          if ! yes | "${sdkmanager}" "emulator" "platform-tools" \
+            "system-images;android-30;google_apis_playstore;x86_64" >"${RUNNER_TEMP}/monkey-sdk-install.log" 2>&1; then
+            set -o pipefail
+            echo "Cloud emulator SDK installation failed; Odoo upload is blocked."
+            exit 1
+          fi
+          set -o pipefail
+
+      - name: Monkey test exact protected APK in cloud
+        id: monkey
+        timeout-minutes: 20
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          python3 "${GITHUB_WORKSPACE}/build-tools/scripts/cloud_monkey_gate.py" \
+            --sdk "${sdk_root}" \
+            --apk "app/${FLAVOR}/app-${FLAVOR}-release-protected.apk" \
+            --result "${RUNNER_TEMP}/monkey-result.json"
+          echo 'Cloud Monkey passed 1000 events: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Encrypt failed Monkey diagnostics for operator
+        if: ${{ !cancelled() && steps.monkey.outcome == 'failure' }}
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+          python3 "${GITHUB_WORKSPACE}/build-tools/scripts/encrypt_monkey_diagnostics.py" \
+            --apk "app/${FLAVOR}/app-${FLAVOR}-release-protected.apk" \
+            --result "${RUNNER_TEMP}/monkey-result.json" \
+            --certificate "${GITHUB_WORKSPACE}/build-tools/scripts/monkey-diagnostics.crt" \
+            --output "${RUNNER_TEMP}/monkey-diagnostics.cms"
+
+      - name: Preserve encrypted failure diagnostics
+        if: ${{ !cancelled() && steps.monkey.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-monkey-diagnostics
+          path: ${{ runner.temp }}/monkey-diagnostics.cms
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload APK draft to Odoo AAPS update manager
+        if: ${{ inputs.upload_to_odoo == 'true' && steps.monkey.outcome == 'success' }}
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        env:
+          HOST: ${{ secrets.HOST }}
+          AAPS_UPDATE_TOKEN: ${{ secrets.AAPS_UPDATE_TOKEN }}
+          AAPS_ALLOWED_PHONE_NUMBERS: ${{ secrets.AAPS_ALLOWED_PHONE_NUMBERS }}
+        run: |
+          set -euo pipefail
+
+          apk_path="app/${FLAVOR}/app-${FLAVOR}-release-protected.apk"
+
+          if [[ ! -f "${apk_path}" ]]; then
+            echo "APK not found at: ${apk_path}"
+            exit 1
+          fi
+
+          # Bind admission to the bytes actually tested, not just a previous
+          # green step or a filename which could have been replaced afterwards.
+          python3 "${GITHUB_WORKSPACE}/build-tools/scripts/cloud_monkey_gate.py" \
+            --verify-upload --apk "${apk_path}" --result "${RUNNER_TEMP}/monkey-result.json"
+
+          allowed_phone_numbers="${AAPS_ALLOWED_PHONE_NUMBERS:-*}"
+          force_update_value="0"
+          case "${FORCE_UPDATE}" in
+            true|1|yes|on) force_update_value="1" ;;
+          esac
+
+          response_file="${RUNNER_TEMP}/odoo-upload-response.txt"
+
+          curl --fail --show-error --silent \
+            --output "${response_file}" \
+            --request POST "${HOST%/}/aaps_update/ci/upload" \
+            --header "X-AAPS-Update-Token: ${AAPS_UPDATE_TOKEN}" \
+            --form "apk=@${apk_path}" \
+            --form "flavor=${FLAVOR}" \
+            --form "changelog=${CHANGELOG}" \
+            --form "allowed_phone_numbers=${allowed_phone_numbers}" \
+            --form "force_update=${force_update_value}"
+
+          echo "APK uploaded to Odoo as a draft AAPS update."
+
+  retest:
+    name: Retest exact protected APK
+    if: ${{ inputs.retest_run != '' }}
+    needs: monkey_controls
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      PRIVATE_REF: ${{ inputs.private_ref }}
+      FLAVOR: ${{ inputs.flavor }}
+      CHANGELOG: ${{ inputs.changelog }}
+      FORCE_UPDATE: ${{ inputs.force_update }}
+      RETEST_RUN: ${{ inputs.retest_run }}
+      RETEST_APK_SHA256: ${{ inputs.retest_apk_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout workflow support scripts
+        uses: actions/checkout@v4
+        with:
+          path: build-tools
+          persist-credentials: false
+      - name: Recover exact signed APK and verify original build provenance
+        shell: bash
+        env:
+          RETEST_PRIVATE_KEY: ${{ secrets.MONKEY_RETEST_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "${RETEST_RUN}" =~ ^[0-9]+$ ]]
+          [[ "${RETEST_APK_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          test -n "${RETEST_PRIVATE_KEY}"
+          gh release download "monkey-retest-${RETEST_RUN}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern monkey-retest.cms --dir "${RUNNER_TEMP}"
+          key_path="${RUNNER_TEMP}/retest-only.key"
+          trap 'rm -f "${key_path}" "${RUNNER_TEMP}/retest.tar.gz"' EXIT
+          printf '%s' "${RETEST_PRIVATE_KEY}" > "${key_path}"
+          unset RETEST_PRIVATE_KEY
+          openssl cms -decrypt -binary -inform DER -in "${RUNNER_TEMP}/monkey-retest.cms" \
+            -inkey "${key_path}" -out "${RUNNER_TEMP}/retest.tar.gz"
+          rm -f "${key_path}"
+          apk_path="private-source/${{ inputs.project_dir }}/app/${FLAVOR}/app-${FLAVOR}-release-protected.apk"
+          python3 build-tools/scripts/validate_retest_source.py --archive "${RUNNER_TEMP}/retest.tar.gz" --apk "${apk_path}"
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          signer="$(find "${sdk_root}/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          test -n "${signer}"
+          "${signer}" verify "${apk_path}" > "${RUNNER_TEMP}/retest-signature-check.log" 2>&1
       - name: Prepare Google Play cloud emulator
         timeout-minutes: 12
         shell: bash

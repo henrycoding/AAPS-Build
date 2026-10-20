@@ -19,7 +19,8 @@ def main():
                     '-alias', 'fixture', '-dname', 'CN=Disposable Monkey Control', '-keyalg', 'RSA', '-validity', '2'], check=True)
     bodies = {'healthy': 'button.setText("Still running");',
               'crash': 'throw new RuntimeException("intentional-public-monkey-control");',
-              'anr': 'try { Thread.sleep(60000); } catch (InterruptedException ignored) { }'}
+              'anr': 'try { Thread.sleep(60000); } catch (InterruptedException ignored) { }',
+              'startup_hang': 'button.setText("Never reached");'}
     for mode, body in bodies.items():
         work = args.out / mode
         work.mkdir()
@@ -30,6 +31,7 @@ def main():
 public class RenamedLauncher extends android.app.Activity {
  public void onCreate(android.os.Bundle saved) {
   super.onCreate(saved);
+  STARTUP_DELAY
   final android.widget.Button button = new android.widget.Button(this);
   button.setText("Public Monkey control");
   button.setOnClickListener(new android.view.View.OnClickListener() {
@@ -37,7 +39,9 @@ public class RenamedLauncher extends android.app.Activity {
   });
   setContentView(button);
  }
-}'''.replace('BODY', body))
+}'''.replace('BODY', body).replace('STARTUP_DELAY',
+            'try { Thread.sleep(%d); } catch (InterruptedException ignored) { }' %
+            (1800000 if mode == 'startup_hang' else 12000) if mode in ('healthy', 'startup_hang') else ''))
         manifest = work / 'AndroidManifest.xml'
         manifest.write_text('''<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="info.nightscout.androidaps" android:versionCode="1" android:versionName="fixture">
 <uses-sdk android:minSdkVersion="27" android:targetSdkVersion="30"/>

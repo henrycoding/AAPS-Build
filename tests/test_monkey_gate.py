@@ -39,7 +39,11 @@ class MonkeyGateTest(unittest.TestCase):
                             'ro.product.cpu.abilist': 'x86_64,arm64-v8a'}[args[2]]
                 if args[:4] == ('shell', 'cmd', 'package', 'resolve-activity'):
                     return 'priority=0 preferredOrder=0\ninfo.nightscout.androidaps/fixture.obfuscated.RenamedLauncher\n'
-                return 'Status: ok'
+                if args[:4] == ('shell', 'dumpsys', 'window', 'windows'):
+                    return 'mCurrentFocus=Window{abc u0 info.nightscout.androidaps/fixture.RenamedLauncher}'
+                if args[:3] == ('shell', 'dumpsys', 'gfxinfo'):
+                    return 'Graphics info for pid 12 [info.nightscout.androidaps]\nTotal frames rendered: 1'
+                return 'Status: timeout'
             probe.device = device
             probe.pid = lambda: '12'
             process = Mock()
@@ -62,6 +66,27 @@ class MonkeyGateTest(unittest.TestCase):
             self.assertEqual('1000', commands[0][-1])
             launch = next(args for args in calls if args[:4] == ('shell', 'am', 'start', '-W'))
             self.assertEqual('info.nightscout.androidaps/fixture.obfuscated.RenamedLauncher', launch[-1])
+
+    def test_startup_needs_real_app_window_and_frames_in_same_process(self):
+        window = 'mCurrentFocus=Window{abc u0 info.nightscout.androidaps/fixture.RenamedLauncher}'
+        frames = 'Graphics info for pid 12 [info.nightscout.androidaps]\nTotal frames rendered: 1'
+        self.assertTrue(gate.ui_ready(window, frames, '12'))
+        for w, f, pid in ((window, frames, '13'),
+                          (window, frames.replace('rendered: 1', 'rendered: 0'), '12'),
+                          (window.replace('info.nightscout.androidaps/', 'com.other.app/'), frames, '12'),
+                          ('mCurrentFocus=Window{abc u0 Splash Screen info.nightscout.androidaps}', frames, '12')):
+            self.assertFalse(gate.ui_ready(w, f, pid))
+
+    def test_hung_or_restarted_startup_is_rejected(self):
+        probe = gate.CloudGate(Path('/sdk'), Path('/app.apk'), Path('/private'))
+        probe.pid = Mock(return_value='12')
+        probe.device = Mock(return_value='no app frames')
+        with patch.object(gate.time, 'monotonic', side_effect=[0, 0, 121]), patch.object(gate.time, 'sleep'):
+            with self.assertRaisesRegex(gate.GateFailure, 'startup_ui_not_ready'):
+                probe.wait_for_ui('12')
+        probe.pid = Mock(return_value='13')
+        with self.assertRaisesRegex(gate.GateFailure, 'app_exited_or_restarted_during_startup'):
+            probe.wait_for_ui('12')
 
     def test_debug_image_is_rejected_before_install_or_monkey(self):
         probe = gate.CloudGate(Path('/sdk'), Path('/app.apk'), Path('/private'))
@@ -104,12 +129,12 @@ class MonkeyGateTest(unittest.TestCase):
             apk, result = Path(directory) / "app.apk", Path(directory) / "result.json"
             apk.write_bytes(b"protected fixture")
             record = gate.evaluate("Events injected: 1000\n// Monkey finished", "", 0, 1000, "12", "12")
-            record.update(apk_sha256=gate.sha256(apk), coverage="unauthenticated_startup_ui")
+            record.update(apk_sha256=gate.sha256(apk), coverage="unauthenticated_startup_ui", startup_ui_ready=True)
             result.write_text(json.dumps(record))
             gate.verify_upload(apk, result)
             for patch in ({"status": "failed"}, {"events_injected": 0}, {"process_stable": False},
                           {"monkey_exit_code": 1}, {"crash_or_anr_detected": True}, {"monkey_aborted": True},
-                          {"coverage": "untested"}, {"apk_sha256": "wrong"}, {"process_stable": "false"}):
+                          {"startup_ui_ready": False}, {"coverage": "untested"}, {"apk_sha256": "wrong"}, {"process_stable": "false"}):
                 with self.subTest(patch=patch), self.assertRaises(gate.GateFailure):
                     result.write_text(json.dumps({**record, **patch}))
                     gate.verify_upload(apk, result)

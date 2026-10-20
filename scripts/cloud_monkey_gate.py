@@ -46,6 +46,15 @@ def evaluate(monkey, logcat, returncode, requested, before_pid, after_pid):
             "monkey_exit_code": returncode}
 
 
+def ui_ready(windows, graphics, pid):
+    # A system splash/starting window is not an app-rendered view. Require an
+    # actual focused app window and frames from this very process.
+    focused = re.search(r"mCurrentFocus=Window\{[^\n}]*\bu\d+ " + re.escape(PACKAGE) + r"/[\w.$]+\}", windows)
+    own_process = re.search(r"Graphics info for pid " + re.escape(pid) + r" \[" + re.escape(PACKAGE) + r"\]", graphics)
+    frames = re.search(r"Total frames rendered:\s*(\d+)", graphics)
+    return bool(focused and own_process and frames and int(frames[1]) > 0)
+
+
 class CloudGate:
     def __init__(self, sdk, apk, directory, count=1000, throttle=300):
         self.sdk, self.apk, self.directory = sdk, apk, directory
@@ -106,6 +115,22 @@ class CloudGate:
             time.sleep(3)
         raise GateFailure("emulator_boot_timeout")
 
+    def wait_for_ui(self, expected_pid):
+        started = time.monotonic()
+        deadline = started + 120
+        while time.monotonic() < deadline:
+            if self.pid() != expected_pid:
+                raise GateFailure("app_exited_or_restarted_during_startup")
+            try:
+                windows = self.device("shell", "dumpsys", "window", "windows", timeout=10, log="startup-window.log")
+                graphics = self.device("shell", "dumpsys", "gfxinfo", PACKAGE, timeout=10, log="startup-graphics.log")
+                if ui_ready(windows, graphics, expected_pid):
+                    return round(time.monotonic() - started, 1)
+            except GateFailure:
+                pass
+            time.sleep(3)
+        raise GateFailure("startup_ui_not_ready")
+
     def test(self):
         # Inspect genuine image properties; never set properties or relax app protection.
         if self.device("shell", "getprop", "ro.debuggable").strip() != "0":
@@ -128,12 +153,17 @@ class CloudGate:
         if not re.fullmatch(re.escape(PACKAGE) + r"/[A-Za-z0-9_.$]+", component):
             raise GateFailure("launcher_not_resolved")
         output = self.device("shell", "am", "start", "-W", "-n", component, timeout=120, log="launch.log")
-        if "Status: ok" not in output:
+        # am -W has its own short Android launch wait. A timeout is pending,
+        # never a pass: independently require a drawn app UI within 120 seconds.
+        if not re.search(r"(?m)^Status: (?:ok|timeout)$", output):
             raise GateFailure("app_launch_failed")
-        time.sleep(10)
         before = self.pid()
         if not before:
             raise GateFailure("app_exited_after_launch")
+        startup_wait = self.wait_for_ui(before)
+        time.sleep(10)
+        if self.pid() != before:
+            raise GateFailure("app_exited_or_restarted_during_startup")
         # No keys, permission events, app switching, or arbitrary text input.
         args = [self.adb, "-s", SERIAL, "shell", "monkey", "-p", PACKAGE, "--throttle", str(self.throttle),
                 "--monitor-native-crashes", "--pct-touch", "75", "--pct-motion", "15", "--pct-pinchzoom", "10", "--pct-trackball", "0"]
@@ -155,8 +185,9 @@ class CloudGate:
         self.collector = None
         for handle in self.handles:
             handle.flush()
-        return evaluate((self.directory / "monkey.log").read_text(errors="replace"),
-                        (self.directory / "logcat.log").read_text(errors="replace"), result.returncode, self.count, before, after)
+        record = evaluate((self.directory / "monkey.log").read_text(errors="replace"),
+                          (self.directory / "logcat.log").read_text(errors="replace"), result.returncode, self.count, before, after)
+        return dict(record, startup_ui_ready=True, startup_wait_seconds=startup_wait)
 
     def close(self):
         for process in (self.collector, self.emulator):
@@ -176,6 +207,7 @@ def verify_upload(apk, result):
     if (record.get("status") != "passed" or record.get("apk_sha256") != sha256(apk)
             or record.get("events_requested") != 1000 or record.get("events_injected") != 1000
             or record.get("coverage") != "unauthenticated_startup_ui" or record.get("process_stable") is not True
+            or record.get("startup_ui_ready") is not True
             or record.get("crash_or_anr_detected") is not False or record.get("monkey_aborted") is not False
             or record.get("monkey_exit_code") != 0):
         raise GateFailure("missing_or_mismatched_monkey_pass")

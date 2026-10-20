@@ -25,7 +25,12 @@ def seal(apk, result, certificate, output):
                 archive.add(result, arcname='result.json', recursive=False)
             logs = result.parent / 'cloud-monkey-private'
             if logs.is_dir():
-                archive.add(logs, arcname='diagnostics')
+                archive.add(logs, arcname='diagnostics', recursive=False)
+                # Exclude emulator userdata/AVD disk images; only diagnostic
+                # text logs belong in the sealed failure bundle.
+                for log in sorted(logs.glob('*.log')):
+                    if log.is_file() and not log.is_symlink():
+                        archive.add(log, arcname='diagnostics/' + log.name, recursive=False)
         process.stdin.close()
         if process.wait() != 0:
             raise RuntimeError('diagnostic encryption failed')
