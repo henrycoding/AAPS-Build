@@ -30,6 +30,12 @@ Only a fixed summary/result is printed to the public workflow log. Raw logcat,
 Monkey output, and emulator logs stay in the runner's private temporary directory;
 no APK, screenshots or raw logs are published as public Actions artifacts.
 
+The manual `Cloud Monkey gate self-test` workflow runs the same gate against
+disposable public fixtures: a healthy app must complete 1000 events, while apps
+which deliberately crash or ANR on touch must fail. It also rejects a different
+APK paired with the healthy result. These controls validate the gate in Actions;
+they do not substitute for the protected APK's own run.
+
 ## Runner memory budget
 
 The 16 GiB runner must accommodate Gradle, Kotlin, the packer, VMP/dex2c,

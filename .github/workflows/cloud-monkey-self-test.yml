@@ -1,0 +1,62 @@
+name: Cloud Monkey gate self-test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare isolated cloud emulator and fixture toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          set +o pipefail
+          if ! yes | "${sdk_root}/cmdline-tools/latest/bin/sdkmanager" \
+            "emulator" "platform-tools" "platforms;android-30" "build-tools;35.0.0" \
+            "system-images;android-30;google_apis_playstore;x86_64" >"${RUNNER_TEMP}/fixture-sdk.log" 2>&1; then
+            exit 1
+          fi
+          set -o pipefail
+          python3 scripts/build_monkey_fixtures.py --sdk "${sdk_root}" --out "${RUNNER_TEMP}/monkey-controls"
+      - name: Healthy control must pass and intentional crash and ANR must fail
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          for mode in healthy crash anr; do
+            mkdir "${RUNNER_TEMP}/monkey-controls/result-${mode}"
+            result="${RUNNER_TEMP}/monkey-controls/result-${mode}/result.json"
+            rc=0
+            python3 scripts/cloud_monkey_gate.py --sdk "${sdk_root}" \
+              --apk "${RUNNER_TEMP}/monkey-controls/${mode}.apk" --result "${result}" || rc=$?
+            python3 - "${mode}" "${result}" "${rc}" <<'PY'
+          import json,sys
+          from pathlib import Path
+          mode,path,rc=sys.argv[1:]
+          r=json.loads(Path(path).read_text())
+          if mode=='healthy':
+              assert int(rc)==0 and r['status']=='passed' and r['events_injected']==1000,r
+          else:
+              assert int(rc)!=0 and r['status']=='failed' and r.get('crash_or_anr_detected') is True,r
+          print('Cloud control verified: '+mode)
+          PY
+          done
+          python3 scripts/cloud_monkey_gate.py --verify-upload --apk "${RUNNER_TEMP}/monkey-controls/healthy.apk" \
+            --result "${RUNNER_TEMP}/monkey-controls/result-healthy/result.json"
+          if python3 scripts/cloud_monkey_gate.py --verify-upload --apk "${RUNNER_TEMP}/monkey-controls/crash.apk" \
+            --result "${RUNNER_TEMP}/monkey-controls/result-healthy/result.json"; then
+            echo 'Replacement APK incorrectly admitted.'
+            exit 1
+          fi
+          echo 'Cloud controls: healthy 1000 events passed; intentional crash/ANR and APK replacement blocked.' >> "${GITHUB_STEP_SUMMARY}"

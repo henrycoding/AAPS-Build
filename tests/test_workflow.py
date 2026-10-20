@@ -148,10 +148,12 @@ class WorkflowTest(unittest.TestCase):
         return self.run_step("Prebuild release and protected shell sequentially", **env)
 
     def test_all_shell_steps_parse(self):
-        for step in STEPS:
+        workflows = [yaml.safe_load(path.read_text()) for path in WORKFLOW.parent.glob('*.yml')]
+        all_steps = [step for document in workflows for job in document['jobs'].values() for step in job['steps']]
+        for step in all_steps:
             if "run" not in step:
                 continue
-            with self.subTest(step=step["name"]):
+            with self.subTest(step=step.get("name", "unnamed")):
                 rendered = re.sub(r"\$\{\{.*?\}\}", "test-value", step["run"])
                 result = subprocess.run(["bash", "-n"], input=rendered, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
