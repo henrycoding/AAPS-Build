@@ -37,6 +37,8 @@ class MonkeyGateTest(unittest.TestCase):
                 if args[:2] == ('shell', 'getprop'):
                     return {'ro.debuggable': '0', 'ro.build.tags': 'release-keys',
                             'ro.product.cpu.abilist': 'x86_64,arm64-v8a'}[args[2]]
+                if args[:4] == ('shell', 'cmd', 'package', 'resolve-activity'):
+                    return 'priority=0 preferredOrder=0\ninfo.nightscout.androidaps/fixture.obfuscated.RenamedLauncher\n'
                 return 'Status: ok'
             probe.device = device
             probe.pid = lambda: '12'
@@ -58,6 +60,8 @@ class MonkeyGateTest(unittest.TestCase):
             self.assertIn('--monitor-native-crashes', commands[0])
             self.assertEqual('0', commands[0][commands[0].index('--pct-syskeys') + 1])
             self.assertEqual('1000', commands[0][-1])
+            launch = next(args for args in calls if args[:4] == ('shell', 'am', 'start', '-W'))
+            self.assertEqual('info.nightscout.androidaps/fixture.obfuscated.RenamedLauncher', launch[-1])
 
     def test_debug_image_is_rejected_before_install_or_monkey(self):
         probe = gate.CloudGate(Path('/sdk'), Path('/app.apk'), Path('/private'))

@@ -25,9 +25,9 @@ def main():
         work.mkdir()
         classes = work / 'classes'
         classes.mkdir()
-        java = work / 'MainActivity.java'
-        java.write_text('''package app.aaps;
-public class MainActivity extends android.app.Activity {
+        java = work / 'RenamedLauncher.java'
+        java.write_text('''package fixture.obfuscated;
+public class RenamedLauncher extends android.app.Activity {
  public void onCreate(android.os.Bundle saved) {
   super.onCreate(saved);
   final android.widget.Button button = new android.widget.Button(this);
@@ -42,7 +42,7 @@ public class MainActivity extends android.app.Activity {
         manifest.write_text('''<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="info.nightscout.androidaps" android:versionCode="1" android:versionName="fixture">
 <uses-sdk android:minSdkVersion="27" android:targetSdkVersion="30"/>
 <application android:label="Disposable Monkey Control" android:debuggable="false" android:theme="@android:style/Theme.Material.Light.NoActionBar">
-<activity android:name="app.aaps.MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
+<activity android:name="fixture.obfuscated.RenamedLauncher" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
 </application></manifest>''')
         subprocess.run(['javac', '--release', '8', '-cp', str(android), '-d', str(classes), str(java)], check=True)
         jar = work / 'classes.jar'

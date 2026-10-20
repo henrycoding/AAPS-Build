@@ -975,6 +975,27 @@ jobs:
             --result "${RUNNER_TEMP}/monkey-result.json"
           echo 'Cloud Monkey passed 1000 events: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: Encrypt failed Monkey diagnostics for operator
+        if: ${{ !cancelled() && steps.monkey.outcome == 'failure' }}
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+          python3 "${GITHUB_WORKSPACE}/build-tools/scripts/encrypt_monkey_diagnostics.py" \
+            --apk "app/${FLAVOR}/app-${FLAVOR}-release-protected.apk" \
+            --result "${RUNNER_TEMP}/monkey-result.json" \
+            --certificate "${GITHUB_WORKSPACE}/build-tools/scripts/monkey-diagnostics.crt" \
+            --output "${RUNNER_TEMP}/monkey-diagnostics.cms"
+
+      - name: Preserve encrypted failure diagnostics
+        if: ${{ !cancelled() && steps.monkey.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-monkey-diagnostics
+          path: ${{ runner.temp }}/monkey-diagnostics.cms
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Upload APK draft to Odoo AAPS update manager
         if: ${{ inputs.upload_to_odoo == 'true' && steps.monkey.outcome == 'success' }}
         shell: bash

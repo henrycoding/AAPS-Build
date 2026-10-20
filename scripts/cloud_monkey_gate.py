@@ -119,7 +119,15 @@ class CloudGate:
         # Only this newly created virtual device's buffers are cleared.
         self.device("logcat", "-c")
         self.collector = self.background([self.adb, "-s", SERIAL, "logcat", "-b", "main,system,events,crash", "-v", "threadtime"], "logcat.log")
-        output = self.device("shell", "am", "start", "-W", "-n", PACKAGE + "/app.aaps.MainActivity", timeout=120, log="launch.log")
+        # Release R8 may rename launcher classes. Resolve the installed manifest
+        # instead of assuming the source/debug Activity name still exists.
+        resolved = self.device("shell", "cmd", "package", "resolve-activity", "--brief",
+                               "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
+                               PACKAGE, log="resolve-launcher.log").strip().splitlines()
+        component = resolved[-1] if resolved else ""
+        if not re.fullmatch(re.escape(PACKAGE) + r"/[A-Za-z0-9_.$]+", component):
+            raise GateFailure("launcher_not_resolved")
+        output = self.device("shell", "am", "start", "-W", "-n", component, timeout=120, log="launch.log")
         if "Status: ok" not in output:
             raise GateFailure("app_launch_failed")
         time.sleep(10)

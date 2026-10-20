@@ -73,7 +73,13 @@ class WorkflowTest(unittest.TestCase):
         self.assertLess(admission.index('--verify-upload'), admission.index('curl --fail'))
         self.assertIn('app-${FLAVOR}-release-protected.apk', script('Monkey test exact protected APK in cloud'))
         self.assertNotIn('continue-on-error', STEPS[monkey])
-        self.assertFalse(any('upload-artifact' in step.get('uses', '') for step in STEPS))
+        artifacts = [step for step in STEPS if 'upload-artifact' in step.get('uses', '')]
+        self.assertEqual(1, len(artifacts))
+        self.assertEqual('${{ runner.temp }}/monkey-diagnostics.cms', artifacts[0]['with']['path'])
+        self.assertIn("steps.monkey.outcome == 'failure'", artifacts[0]['if'])
+        encrypted = script('Encrypt failed Monkey diagnostics for operator')
+        self.assertIn('encrypt_monkey_diagnostics.py', encrypted)
+        self.assertIn('--certificate', encrypted)
 
     def test_failed_missing_or_stale_monkey_result_never_reaches_odoo(self):
         import hashlib

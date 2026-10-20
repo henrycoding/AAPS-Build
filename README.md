@@ -28,7 +28,12 @@ device. Broader UI coverage requires a separately prepared test account and flow
 
 Only a fixed summary/result is printed to the public workflow log. Raw logcat,
 Monkey output, and emulator logs stay in the runner's private temporary directory;
-no APK, screenshots or raw logs are published as public Actions artifacts.
+no plaintext APK, screenshots or raw logs are published as public Actions artifacts.
+On gate failure, the exact APK and diagnostic logs are streamed directly into an
+OpenSSL CMS encrypted archive with a 3-day artifact retention. The decryption key
+stays solely on the operator machine; CI holds only the public certificate.
+The archive never contains signing keys, checkout credentials, or Odoo secrets.
+The launcher is resolved from the installed manifest, including R8-renamed classes.
 
 The manual `Cloud Monkey gate self-test` workflow runs the same gate against
 disposable public fixtures: a healthy app must complete 1000 events, while apps
