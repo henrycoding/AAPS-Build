@@ -28,10 +28,24 @@ class MonkeyGateTest(unittest.TestCase):
             process = Mock()
             process.poll.return_value = None
             probe.background = lambda args, log: trace.append('emulator') or process
-            probe.device = lambda *args, **kwargs: '1'
-            probe.start()
+            probe.device = lambda *args, **kwargs: 'package:/system/framework/framework-res.apk' if args[:3] == ('shell', 'cmd', 'package') else '1'
+            with patch.object(gate.time, 'sleep'):
+                probe.start()
             self.assertLess(trace.index('start-server'), trace.index('emulator'))
             self.assertNotIn('ANDROID_EMULATOR_HOME', {k: v for k, v in probe.env.items() if k not in gate.os.environ})
+
+    def test_boot_waits_through_adb_reconnect_and_package_service_startup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = gate.CloudGate(Path('/sdk'), Path('/app.apk'), Path(directory))
+            probe.command = Mock(return_value='')
+            process = Mock(); process.poll.return_value = None
+            probe.background = Mock(return_value=process)
+            probe.device = Mock(side_effect=[gate.GateFailure('offline'), '1', 'package:framework',
+                                            gate.GateFailure('offline'), '1', 'package:framework',
+                                            '1', 'package:framework', '1', 'package:framework'])
+            with patch.object(gate.time, 'sleep'):
+                probe.start()
+            self.assertEqual(10, probe.device.call_count)
 
     def test_actual_monkey_invocation_targets_only_emulator_and_stops_on_errors(self):
         with tempfile.TemporaryDirectory() as directory:

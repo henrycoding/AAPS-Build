@@ -95,6 +95,10 @@ class CloudGate:
         if log:
             (self.directory / log).write_bytes(result.stdout + result.stderr)
         if result.returncode:
+            if not log:
+                (self.directory / "last-command-failure.log").write_bytes(result.stdout + result.stderr)
+            if b"device offline" in result.stderr or b"device not found" in result.stderr:
+                raise GateFailure("emulator_adb_offline")
             raise GateFailure("command_failed")
         return result.stdout.decode("utf-8", errors="replace").replace("\r", "")
 
@@ -124,14 +128,21 @@ class CloudGate:
             "-no-window", "-no-audio", "-no-boot-anim", "-no-snapshot", "-gpu", "swiftshader_indirect",
             "-feature", "-Vulkan", "-memory", "2048", "-cores", "2", "-accel", "on", "-camera-back", "none", "-camera-front", "none"], "emulator.log")
         deadline = time.monotonic() + 300
+        ready_checks = 0
         while time.monotonic() < deadline:
             if self.emulator.poll() is not None:
                 raise GateFailure("emulator_stopped_during_boot")
             try:
-                if self.device("shell", "getprop", "sys.boot_completed", timeout=10, log="boot-adb.log").strip() == "1":
+                booted = self.device("shell", "getprop", "sys.boot_completed", timeout=10, log="boot-adb.log").strip() == "1"
+                package = self.device("shell", "cmd", "package", "path", "android", timeout=10, log="boot-package.log") if booted else ""
+                ready_checks = ready_checks + 1 if booted and package.startswith("package:") else 0
+                # The Play image briefly reconnects ADB after setting boot_completed.
+                # Require consecutive successful probes and a live package service
+                # before any install or app operation; no retries hide app failures.
+                if ready_checks >= 3:
                     return
             except GateFailure:
-                pass
+                ready_checks = 0
             time.sleep(3)
         raise GateFailure("emulator_boot_timeout")
 
