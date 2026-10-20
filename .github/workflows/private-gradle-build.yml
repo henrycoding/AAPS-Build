@@ -80,6 +80,12 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: "2"
 
     steps:
+      - name: Checkout workflow support scripts
+        uses: actions/checkout@v4
+        with:
+          path: build-tools
+          persist-credentials: false
+
       - name: Validate required secrets
         shell: bash
         env:
@@ -927,8 +933,45 @@ jobs:
           fi
           echo "Verified protected APK: ${apk_path}"
 
+      - name: Prepare Google Play cloud emulator
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager="${sdk_root}/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -c /dev/kvm ]]; then
+            echo "Cloud emulator requires KVM; Odoo upload is blocked."
+            exit 1
+          fi
+          sudo chmod a+rw /dev/kvm
+          # This genuine user/release-key image supports ARM translation. Do not
+          # use root, writable-system, property spoofing, or a weakened APK.
+          set +o pipefail
+          if ! yes | "${sdkmanager}" "emulator" "platform-tools" \
+            "system-images;android-30;google_apis_playstore;x86_64" >"${RUNNER_TEMP}/monkey-sdk-install.log" 2>&1; then
+            set -o pipefail
+            echo "Cloud emulator SDK installation failed; Odoo upload is blocked."
+            exit 1
+          fi
+          set -o pipefail
+
+      - name: Monkey test exact protected APK in cloud
+        id: monkey
+        timeout-minutes: 20
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          python3 "${GITHUB_WORKSPACE}/build-tools/scripts/cloud_monkey_gate.py" \
+            --sdk "${sdk_root}" \
+            --apk "app/${FLAVOR}/app-${FLAVOR}-release-protected.apk" \
+            --result "${RUNNER_TEMP}/monkey-result.json"
+          echo 'Cloud Monkey passed 1000 events: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Upload APK draft to Odoo AAPS update manager
-        if: ${{ inputs.upload_to_odoo == 'true' }}
+        if: ${{ inputs.upload_to_odoo == 'true' && steps.monkey.outcome == 'success' }}
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
         env:
@@ -944,6 +987,11 @@ jobs:
             echo "APK not found at: ${apk_path}"
             exit 1
           fi
+
+          # Bind admission to the bytes actually tested, not just a previous
+          # green step or a filename which could have been replaced afterwards.
+          python3 "${GITHUB_WORKSPACE}/build-tools/scripts/cloud_monkey_gate.py" \
+            --verify-upload --apk "${apk_path}" --result "${RUNNER_TEMP}/monkey-result.json"
 
           allowed_phone_numbers="${AAPS_ALLOWED_PHONE_NUMBERS:-*}"
           force_update_value="0"

@@ -54,6 +54,53 @@ record("end")
 
 
 class WorkflowTest(unittest.TestCase):
+    def test_monkey_pass_and_apk_hash_verification_precede_upload(self):
+        names = [step['name'] for step in STEPS]
+        prepare = names.index('Prepare Google Play cloud emulator')
+        monkey = names.index('Monkey test exact protected APK in cloud')
+        upload = names.index('Upload APK draft to Odoo AAPS update manager')
+        self.assertLess(names.index('Verify protected APK output'), prepare)
+        self.assertLess(prepare, monkey)
+        self.assertLess(monkey, upload)
+        self.assertIn("steps.monkey.outcome == 'success'", STEPS[upload]['if'])
+        admission = script('Upload APK draft to Odoo AAPS update manager')
+        self.assertLess(admission.index('--verify-upload'), admission.index('curl --fail'))
+        self.assertIn('app-${FLAVOR}-release-protected.apk', script('Monkey test exact protected APK in cloud'))
+        self.assertNotIn('continue-on-error', STEPS[monkey])
+        self.assertFalse(any('upload-artifact' in step.get('uses', '') for step in STEPS))
+
+    def test_failed_missing_or_stale_monkey_result_never_reaches_odoo(self):
+        import hashlib
+        import shutil
+        tools = self.root / 'build-tools/scripts'
+        tools.mkdir(parents=True)
+        shutil.copyfile(WORKFLOW.parents[2] / 'scripts/cloud_monkey_gate.py', tools / 'cloud_monkey_gate.py')
+        apk = self.root / 'app/full/app-full-release-protected.apk'
+        apk.parent.mkdir(parents=True)
+        apk.write_bytes(b'protected-apk-fixture')
+        curl = self.root / 'bin/curl'
+        curl.write_text('#!/bin/sh\n: > "$UPLOAD_MARKER"\n')
+        curl.chmod(0o755)
+        marker = self.root / 'uploaded'
+        record = {'status': 'passed', 'apk_sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
+                  'coverage': 'unauthenticated_startup_ui', 'events_requested': 1000, 'events_injected': 1000,
+                  'process_stable': True, 'crash_or_anr_detected': False, 'monkey_aborted': False, 'monkey_exit_code': 0}
+        result_file = self.root / 'monkey-result.json'
+        for patch in (None, {'status': 'failed'}, {'apk_sha256': 'stale'}, {'events_injected': 999}, {}):
+            with self.subTest(patch=patch):
+                if result_file.exists():
+                    result_file.unlink()
+                if marker.exists():
+                    marker.unlink()
+                if patch is not None:
+                    result_file.write_text(json.dumps({**record, **patch}))
+                run = self.run_step('Upload APK draft to Odoo AAPS update manager', GITHUB_WORKSPACE=str(self.root),
+                                    HOST='https://invalid.test', AAPS_UPDATE_TOKEN='test-only-token', FORCE_UPDATE='false',
+                                    CHANGELOG='', UPLOAD_MARKER=str(marker))
+                allowed = patch == {}
+                self.assertEqual(run.returncode == 0, allowed, run.stdout + run.stderr)
+                self.assertEqual(marker.exists(), allowed)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

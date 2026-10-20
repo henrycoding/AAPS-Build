@@ -1,7 +1,34 @@
 # AAPS private build
 
 The `Private Gradle Build` workflow checks out the source selected by
-`private_ref`, builds and protects the APK, and optionally uploads an Odoo draft.
+`private_ref`, builds and protects the APK, runs a cloud Monkey gate on that exact
+APK, and optionally uploads an Odoo draft only after the gate passes.
+
+## Cloud Monkey gate
+
+The same Ubuntu runner starts a fresh Android 11 Google Play x86_64 emulator
+with ARM translation. Its genuine user/release-key properties are checked;
+no app protection, authentication, system properties, or APK bytes are weakened
+for emulator compatibility. If translation or the protected runtime cannot start,
+the gate fails and upload is blocked. This first hosted run must establish actual
+compatibility; unit tests alone do not prove it.
+
+The gate injects 1000 touch/motion events with seed 42 and a 300 ms throttle.
+Crashes, ANRs, partial event counts, a missing/dead/restarted app process, a
+timeout, or missing log collection fail the gate. It never uses Monkey's
+ignore-crashes/ignore-timeouts flags. Before uploading, the APK SHA-256 must match
+the passing result. The existing manual script in the private source repository
+is separate and is not used as the admission check.
+
+Coverage is **unauthenticated startup and UI smoke only** on a clean emulator.
+No production customer credentials, logged-in functionality, BLE connections,
+pump commands, or dosing paths are exercised. This does not replace physical
+device/native ARM or pump validation. The emulator never selects an attached USB
+device. Broader UI coverage requires a separately prepared test account and flow.
+
+Only a fixed summary/result is printed to the public workflow log. Raw logcat,
+Monkey output, and emulator logs stay in the runner's private temporary directory;
+no APK, screenshots or raw logs are published as public Actions artifacts.
 
 ## Runner memory budget
 
