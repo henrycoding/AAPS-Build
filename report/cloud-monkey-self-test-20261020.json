@@ -1,0 +1,55 @@
+{
+  "status": "passed",
+  "workflow": "Cloud Monkey gate self-test",
+  "run_id": 39357028446,
+  "url": "https://github.com/henrycoding/AAPS-Build/actions/runs/39357028446",
+  "tested_commit": "8940c03b99994f9e4e808fc7110e7f86b8a0e948",
+  "gate_script_sha256": "99e58858d5f5680fca8343dec0538cf873ed10b72fb219cf3b9b131d8a8b1cf4",
+  "controls": {
+    "healthy": {
+      "apk_sha256": "8a094ad6023fa856569bbba713a6ec6e32ab14ed7aea0f417034835febb7b4f6",
+      "coverage": "unauthenticated_startup_ui",
+      "crash_or_anr_detected": false,
+      "events_injected": 1000,
+      "events_requested": 1000,
+      "monkey_aborted": false,
+      "monkey_exit_code": 0,
+      "process_stable": true,
+      "status": "passed",
+      "system_image": "system-images;android-30;google_apis_playstore;x86_64"
+    },
+    "intentional_crash": {
+      "apk_sha256": "de86c533a573d01f06ebca1d766847a470eab3e00d7f7d6dac3a2d1db54109c6",
+      "coverage": "unauthenticated_startup_ui",
+      "crash_or_anr_detected": true,
+      "events_injected": 3,
+      "events_requested": 1000,
+      "monkey_aborted": true,
+      "monkey_exit_code": 3,
+      "process_stable": false,
+      "status": "failed",
+      "system_image": "system-images;android-30;google_apis_playstore;x86_64"
+    },
+    "intentional_anr": {
+      "apk_sha256": "1690e11c497ac1d4dff6bb759f5168a9f9b3fef4a7f6c252d5b68e0d2345b620",
+      "coverage": "unauthenticated_startup_ui",
+      "crash_or_anr_detected": true,
+      "events_injected": 127,
+      "events_requested": 1000,
+      "monkey_aborted": true,
+      "monkey_exit_code": 127,
+      "process_stable": true,
+      "status": "failed",
+      "system_image": "system-images;android-30;google_apis_playstore;x86_64"
+    }
+  },
+  "replacement_apk_rejected": true,
+  "local_regression_tests_passed": 22,
+  "first_attempt": {
+    "run_id": 39356170693,
+    "conclusion": "failure",
+    "reason": "emulator_boot_timeout",
+    "correction": "Shared default Android/ADB key directory; initialize adb before emulator; disable Vulkan; pin Ubuntu 24.04"
+  },
+  "scope": "Disposable public controls only. This verifies the Actions gate, not the protected AAPS APK, customer login, BLE or physical pumps."
+}

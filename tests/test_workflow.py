@@ -54,6 +54,12 @@ record("end")
 
 
 class WorkflowTest(unittest.TestCase):
+    def test_cloud_controls_must_pass_before_expensive_private_build(self):
+        self.assertEqual('monkey_controls', DOCUMENT['jobs']['build']['needs'])
+        self.assertEqual('./.github/workflows/cloud-monkey-self-test.yml', DOCUMENT['jobs']['monkey_controls']['uses'])
+        control = yaml.safe_load((WORKFLOW.parent / 'cloud-monkey-self-test.yml').read_text())
+        self.assertIn('workflow_call', control.get('on', control.get(True)))
+
     def test_monkey_pass_and_apk_hash_verification_precede_upload(self):
         names = [step['name'] for step in STEPS]
         prepare = names.index('Prepare Google Play cloud emulator')
@@ -149,7 +155,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_all_shell_steps_parse(self):
         workflows = [yaml.safe_load(path.read_text()) for path in WORKFLOW.parent.glob('*.yml')]
-        all_steps = [step for document in workflows for job in document['jobs'].values() for step in job['steps']]
+        all_steps = [step for document in workflows for job in document['jobs'].values() for step in job.get('steps', [])]
         for step in all_steps:
             if "run" not in step:
                 continue

@@ -35,6 +35,8 @@ disposable public fixtures: a healthy app must complete 1000 events, while apps
 which deliberately crash or ANR on touch must fail. It also rejects a different
 APK paired with the healthy result. These controls validate the gate in Actions;
 they do not substitute for the protected APK's own run.
+The private build calls this reusable workflow as a required dependency first,
+so a broken cloud test environment blocks the expensive build before checkout.
 
 ## Runner memory budget
 

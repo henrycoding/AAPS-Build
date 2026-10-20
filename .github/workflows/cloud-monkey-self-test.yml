@@ -2,6 +2,7 @@ name: Cloud Monkey gate self-test
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
