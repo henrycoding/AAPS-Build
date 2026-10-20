@@ -107,7 +107,7 @@ class WorkflowTest(unittest.TestCase):
         curl.chmod(0o755)
         marker = self.root / 'uploaded'
         record = {'status': 'passed', 'apk_sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
-                  'coverage': 'unauthenticated_startup_ui', 'startup_ui_ready': True, 'events_requested': 1000, 'events_injected': 1000,
+                  'coverage': 'unauthenticated_startup_ui', 'startup_ui_ready': True, 'input_injection_failed': False, 'events_requested': 1000, 'events_injected': 1000,
                   'process_stable': True, 'crash_or_anr_detected': False, 'monkey_aborted': False, 'monkey_exit_code': 0}
         result_file = self.root / 'monkey-result.json'
         for patch in (None, {'status': 'failed'}, {'apk_sha256': 'stale'}, {'events_injected': 999}, {}):

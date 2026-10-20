@@ -66,6 +66,9 @@ class MonkeyGateTest(unittest.TestCase):
             self.assertEqual('1000', commands[0][-1])
             launch = next(args for args in calls if args[:4] == ('shell', 'am', 'start', '-W'))
             self.assertEqual('info.nightscout.androidaps/fixture.obfuscated.RenamedLauncher', launch[-1])
+            self.assertEqual('android.intent.action.MAIN', launch[launch.index('-a') + 1])
+            self.assertEqual('android.intent.category.LAUNCHER', launch[launch.index('-c') + 1])
+            self.assertEqual('0x10200000', launch[launch.index('-f') + 1])
 
     def test_startup_needs_real_app_window_and_frames_in_same_process(self):
         window = 'mCurrentFocus=Window{abc u0 info.nightscout.androidaps/fixture.RenamedLauncher}'
@@ -119,6 +122,15 @@ class MonkeyGateTest(unittest.TestCase):
         self.assertEqual("passed", gate.evaluate(output, "am_crash: [0,13,com.other.app,1]", 0, 1000, "12", "12")["status"])
         self.assertEqual("passed", gate.evaluate(output, "am_crash: [0,13,info.nightscout.androidaps.other,1]", 0, 1000, "12", "12")["status"])
 
+    def test_reported_event_count_cannot_hide_dropped_or_failed_input(self):
+        output = 'Events injected: 1000\n// Monkey finished'
+        for text in ('// Injection Failed', ':Dropped: keys=0 pointers=3 trackballs=0 flips=0 rotations=0'):
+            result = gate.evaluate(output + '\n' + text, '', 0, 1000, '12', '12')
+            self.assertEqual('failed', result['status'])
+            self.assertTrue(result['input_injection_failed'])
+        clean = gate.evaluate(output + '\n:Dropped: keys=0 pointers=0', '', 0, 1000, '12', '12')
+        self.assertEqual('passed', clean['status'])
+
     def test_ignored_or_aborted_monkey_is_not_admitted(self):
         output = "Events injected: 1000\n// Monkey finished"
         for failure in ("Monkey aborted", "System appears to have crashed", "native crash", "SecurityException"):
@@ -134,7 +146,7 @@ class MonkeyGateTest(unittest.TestCase):
             gate.verify_upload(apk, result)
             for patch in ({"status": "failed"}, {"events_injected": 0}, {"process_stable": False},
                           {"monkey_exit_code": 1}, {"crash_or_anr_detected": True}, {"monkey_aborted": True},
-                          {"startup_ui_ready": False}, {"coverage": "untested"}, {"apk_sha256": "wrong"}, {"process_stable": "false"}):
+                          {"startup_ui_ready": False}, {"input_injection_failed": True}, {"coverage": "untested"}, {"apk_sha256": "wrong"}, {"process_stable": "false"}):
                 with self.subTest(patch=patch), self.assertRaises(gate.GateFailure):
                     result.write_text(json.dumps({**record, **patch}))
                     gate.verify_upload(apk, result)

@@ -40,10 +40,13 @@ def evaluate(monkey, logcat, returncode, requested, before_pid, after_pid):
     crash |= bool(re.search(r"(?im)\bProcess:\s*" + app, logcat))
     aborted = bool(re.search(r"(?i)monkey aborted|system appears to have crashed|native crash|securityexception", monkey))
     stable = bool(before_pid and before_pid == after_pid)
-    passed = returncode == 0 and injected == requested and "Monkey finished" in monkey and stable and not crash and not aborted
+    dropped = any(int(n) > 0 for n in re.findall(r"(?:keys|pointers|trackballs|flips|rotations)=(\d+)", monkey))
+    injection_failed = dropped or bool(re.search(r"(?im)//\s*Injection Failed", monkey))
+    passed = (returncode == 0 and injected == requested and "Monkey finished" in monkey
+              and stable and not crash and not aborted and not injection_failed)
     return {"status": "passed" if passed else "failed", "events_requested": requested, "events_injected": injected,
             "process_stable": stable, "crash_or_anr_detected": crash, "monkey_aborted": aborted,
-            "monkey_exit_code": returncode}
+            "monkey_exit_code": returncode, "input_injection_failed": injection_failed}
 
 
 def ui_ready(windows, graphics, pid):
@@ -154,7 +157,12 @@ class CloudGate:
         component = resolved[-1] if resolved else ""
         if not re.fullmatch(re.escape(PACKAGE) + r"/[A-Za-z0-9_.$]+", component):
             raise GateFailure("launcher_not_resolved")
-        output = self.device("shell", "am", "start", "-W", "-n", component, timeout=120, log="launch.log")
+        # Match Monkey's initial MAIN/LAUNCHER intent and task flags. Starting
+        # only by component creates a different base intent; Monkey would then
+        # create another Activity and inject touches during its second startup.
+        output = self.device("shell", "am", "start", "-W", "-a", "android.intent.action.MAIN",
+                             "-c", "android.intent.category.LAUNCHER", "-f", "0x10200000",
+                             "-n", component, timeout=120, log="launch.log")
         # am -W has its own short Android launch wait. A timeout is pending,
         # never a pass: independently require a drawn app UI within 120 seconds.
         if not re.search(r"(?m)^Status: (?:ok|timeout)$", output):
@@ -209,7 +217,7 @@ def verify_upload(apk, result):
     if (record.get("status") != "passed" or record.get("apk_sha256") != sha256(apk)
             or record.get("events_requested") != 1000 or record.get("events_injected") != 1000
             or record.get("coverage") != "unauthenticated_startup_ui" or record.get("process_stable") is not True
-            or record.get("startup_ui_ready") is not True
+            or record.get("startup_ui_ready") is not True or record.get("input_injection_failed") is not False
             or record.get("crash_or_anr_detected") is not False or record.get("monkey_aborted") is not False
             or record.get("monkey_exit_code") != 0):
         raise GateFailure("missing_or_mismatched_monkey_pass")

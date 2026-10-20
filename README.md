@@ -84,7 +84,10 @@ or protect a real APK.
 
 An Android `am start -W` timeout remains pending until the same process has a
 focused app window and rendered frames, with a 120-second readiness deadline.
-A stalled, dead or restarted process is rejected before Monkey begins. Cloud
+A stalled, dead or restarted process is rejected before Monkey begins. Prelaunch
+uses the same MAIN/LAUNCHER intent and task flags as Monkey, avoiding an extra
+Activity instance at the start of injection. Dropped or failed input also blocks
+admission even when Monkey reports the requested event count. Cloud
 controls cover a 12-second healthy startup and a deliberately hung startup.
 
 For a gate-only correction, `retest_run` and `retest_apk_sha256` select an existing
