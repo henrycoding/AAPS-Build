@@ -44,7 +44,7 @@ jobs:
             if [[ "${rc}" -ne 0 ]]; then
               # These diagnostics contain only the public disposable controls;
               # the private-source build never publishes raw device logs.
-              for log in emulator.log adb-server.log boot-adb.log install.log launch.log startup-window.log startup-graphics.log; do
+              for log in emulator.log adb-server.log boot-adb.log install.log launch.log startup-window.log startup-graphics.log monkey.log logcat.log; do
                 path="${RUNNER_TEMP}/monkey-controls/result-${mode}/cloud-monkey-private/${log}"
                 if [[ -f "${path}" ]]; then tail -n 60 "${path}"; fi
               done
@@ -71,3 +71,11 @@ jobs:
             exit 1
           fi
           echo 'Cloud controls: slow-start healthy 1000 events passed; intentional crash/ANR, hung startup and APK replacement blocked.' >> "${GITHUB_STEP_SUMMARY}"
+      - name: Preserve public control failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-monkey-control-diagnostics
+          path: ${{ runner.temp }}/monkey-controls/result-*/cloud-monkey-private/*.log
+          if-no-files-found: ignore
+          retention-days: 1
