@@ -122,7 +122,9 @@ class CloudGate:
             if self.pid() != expected_pid:
                 raise GateFailure("app_exited_or_restarted_during_startup")
             try:
-                windows = self.device("shell", "dumpsys", "window", "windows", timeout=10, log="startup-window.log")
+                # On Android 11 the focus belongs to DisplayContent; the
+                # "windows" subcommand omits mCurrentFocus.
+                windows = self.device("shell", "dumpsys", "window", "displays", timeout=10, log="startup-window.log")
                 graphics = self.device("shell", "dumpsys", "gfxinfo", PACKAGE, timeout=10, log="startup-graphics.log")
                 if ui_ready(windows, graphics, expected_pid):
                     return round(time.monotonic() - started, 1)

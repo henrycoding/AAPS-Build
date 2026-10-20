@@ -44,7 +44,7 @@ jobs:
             if [[ "${rc}" -ne 0 ]]; then
               # These diagnostics contain only the public disposable controls;
               # the private-source build never publishes raw device logs.
-              for log in emulator.log adb-server.log boot-adb.log install.log launch.log; do
+              for log in emulator.log adb-server.log boot-adb.log install.log launch.log startup-window.log startup-graphics.log; do
                 path="${RUNNER_TEMP}/monkey-controls/result-${mode}/cloud-monkey-private/${log}"
                 if [[ -f "${path}" ]]; then tail -n 60 "${path}"; fi
               done

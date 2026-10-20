@@ -39,7 +39,7 @@ class MonkeyGateTest(unittest.TestCase):
                             'ro.product.cpu.abilist': 'x86_64,arm64-v8a'}[args[2]]
                 if args[:4] == ('shell', 'cmd', 'package', 'resolve-activity'):
                     return 'priority=0 preferredOrder=0\ninfo.nightscout.androidaps/fixture.obfuscated.RenamedLauncher\n'
-                if args[:4] == ('shell', 'dumpsys', 'window', 'windows'):
+                if args[:4] == ('shell', 'dumpsys', 'window', 'displays'):
                     return 'mCurrentFocus=Window{abc u0 info.nightscout.androidaps/fixture.RenamedLauncher}'
                 if args[:3] == ('shell', 'dumpsys', 'gfxinfo'):
                     return 'Graphics info for pid 12 [info.nightscout.androidaps]\nTotal frames rendered: 1'
