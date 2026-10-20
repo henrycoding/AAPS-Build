@@ -55,7 +55,7 @@ jobs:
           mode,path,rc=sys.argv[1:]
           r=json.loads(Path(path).read_text())
           if mode=='healthy':
-              assert int(rc)==0 and r['status']=='passed' and r['events_injected']==1000,r
+              assert int(rc)==0 and r['status']=='passed' and r['events_injected']==1200 and r['touch_events_delivered']>=1000,r
           elif mode=='startup_hang':
               assert int(rc)!=0 and r['status']=='failed' and r.get('reason')=='startup_ui_not_ready',r
           else:
@@ -70,7 +70,7 @@ jobs:
             echo 'Replacement APK incorrectly admitted.'
             exit 1
           fi
-          echo 'Cloud controls: slow-start healthy 1000 events passed; intentional crash/ANR, hung startup and APK replacement blocked.' >> "${GITHUB_STEP_SUMMARY}"
+          echo 'Cloud controls: slow-start healthy >=1000 successful touch events passed; intentional crash/ANR, hung startup and APK replacement blocked.' >> "${GITHUB_STEP_SUMMARY}"
       - name: Preserve public control failure diagnostics
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4

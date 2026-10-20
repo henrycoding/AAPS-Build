@@ -12,6 +12,13 @@ gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
 
 
+def complete(dropped=0):
+    return (':Switch: main\n' + ':Sending Touch (ACTION_UP): 0:(50,50)\n' * 1199
+            + '    // Injection Failed\n' * dropped
+            + ':Dropped: keys=0 pointers=%d trackballs=0 flips=0 rotations=0\n' % dropped
+            + 'Events injected: 1200\n// Monkey finished')
+
+
 class MonkeyGateTest(unittest.TestCase):
     def test_adb_identity_is_ready_before_secure_emulator_boot(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -52,7 +59,7 @@ class MonkeyGateTest(unittest.TestCase):
             commands = []
             def run(args, **kwargs):
                 commands.append(args)
-                kwargs['stdout'].write(b'Events injected: 1000\n// Monkey finished')
+                kwargs['stdout'].write(complete().encode())
                 return SimpleNamespace(returncode=0)
             with patch.object(gate.time, 'sleep'), patch.object(gate.subprocess, 'run', side_effect=run):
                 result = probe.test()
@@ -63,7 +70,7 @@ class MonkeyGateTest(unittest.TestCase):
             self.assertNotIn('setprop', str(calls))
             self.assertIn('--monitor-native-crashes', commands[0])
             self.assertEqual('0', commands[0][commands[0].index('--pct-syskeys') + 1])
-            self.assertEqual('1000', commands[0][-1])
+            self.assertEqual('1200', commands[0][-1])
             launch = next(args for args in calls if args[:4] == ('shell', 'am', 'start', '-W'))
             self.assertEqual('info.nightscout.androidaps/fixture.obfuscated.RenamedLauncher', launch[-1])
             self.assertEqual('android.intent.action.MAIN', launch[launch.index('-a') + 1])
@@ -99,16 +106,16 @@ class MonkeyGateTest(unittest.TestCase):
         self.assertEqual(1, probe.device.call_count)
 
     def test_complete_stable_clean_run_is_required(self):
-        output = "Events injected: 1000\n// Monkey finished"
-        self.assertEqual("passed", gate.evaluate(output, "", 0, 1000, "12", "12")["status"])
-        for text, code, pid in (("Events injected: 999\n// Monkey finished", 0, "12"),
-                                ("Events injected: 1000", 0, "12"), (output, 1, "12"),
+        output = complete()
+        self.assertEqual("passed", gate.evaluate(output, "", 0, 1200, "12", "12")["status"])
+        for text, code, pid in ((output.replace("injected: 1200", "injected: 1199"), 0, "12"),
+                                (output.replace("// Monkey finished", ""), 0, "12"), (output, 1, "12"),
                                 (output, 0, "13"), (output, 0, "")):
             with self.subTest(text=text, code=code, pid=pid):
-                self.assertEqual("failed", gate.evaluate(text, "", code, 1000, "12", pid)["status"])
+                self.assertEqual("failed", gate.evaluate(text, "", code, 1200, "12", pid)["status"])
 
     def test_crashes_anrs_native_tombstones_and_early_death_fail_even_on_zero_exit(self):
-        output = "Events injected: 1000\n// Monkey finished"
+        output = complete()
         for text in ("// CRASH: info.nightscout.androidaps (pid 12)",
                      "// NOT RESPONDING: info.nightscout.androidaps", "ANR in info.nightscout.androidaps",
                      "am_crash: [0,12,info.nightscout.androidaps,1,secret]",
@@ -118,35 +125,36 @@ class MonkeyGateTest(unittest.TestCase):
                      ">>> info.nightscout.androidaps:worker <<<",
                      "Process: info.nightscout.androidaps, PID: 12"):
             with self.subTest(text=text):
-                self.assertEqual("failed", gate.evaluate(output, text, 0, 1000, "12", "12")["status"])
-        self.assertEqual("passed", gate.evaluate(output, "am_crash: [0,13,com.other.app,1]", 0, 1000, "12", "12")["status"])
-        self.assertEqual("passed", gate.evaluate(output, "am_crash: [0,13,info.nightscout.androidaps.other,1]", 0, 1000, "12", "12")["status"])
+                self.assertEqual("failed", gate.evaluate(output, text, 0, 1200, "12", "12")["status"])
+        self.assertEqual("passed", gate.evaluate(output, "am_crash: [0,13,com.other.app,1]", 0, 1200, "12", "12")["status"])
+        self.assertEqual("passed", gate.evaluate(output, "am_crash: [0,13,info.nightscout.androidaps.other,1]", 0, 1200, "12", "12")["status"])
 
-    def test_reported_event_count_cannot_hide_dropped_or_failed_input(self):
-        output = 'Events injected: 1000\n// Monkey finished'
-        for text in ('// Injection Failed', ':Dropped: keys=0 pointers=3 trackballs=0 flips=0 rotations=0'):
-            result = gate.evaluate(output + '\n' + text, '', 0, 1000, '12', '12')
-            self.assertEqual('failed', result['status'])
-            self.assertTrue(result['input_injection_failed'])
-        clean = gate.evaluate(output + '\n:Dropped: keys=0 pointers=0', '', 0, 1000, '12', '12')
-        self.assertEqual('passed', clean['status'])
+    def test_reported_count_needs_at_least_1000_successful_touch_injections(self):
+        for dropped in (0, 6, 199):
+            result = gate.evaluate(complete(dropped), '', 0, 1200, '12', '12')
+            self.assertEqual('passed', result['status'])
+            self.assertEqual(1199 - dropped, result['touch_events_delivered'])
+        for output in (complete(200), complete(6).replace('pointers=6', 'pointers=0'),
+                       complete().replace(':Sending Touch', ':Uncounted'),
+                       complete().replace('keys=0', 'keys=1')):
+            self.assertEqual('failed', gate.evaluate(output, '', 0, 1200, '12', '12')['status'])
 
     def test_ignored_or_aborted_monkey_is_not_admitted(self):
-        output = "Events injected: 1000\n// Monkey finished"
+        output = complete()
         for failure in ("Monkey aborted", "System appears to have crashed", "native crash", "SecurityException"):
-            self.assertEqual("failed", gate.evaluate(output + failure, "", 0, 1000, "12", "12")["status"])
+            self.assertEqual("failed", gate.evaluate(output + failure, "", 0, 1200, "12", "12")["status"])
 
     def test_upload_requires_matching_apk_bytes_and_complete_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             apk, result = Path(directory) / "app.apk", Path(directory) / "result.json"
             apk.write_bytes(b"protected fixture")
-            record = gate.evaluate("Events injected: 1000\n// Monkey finished", "", 0, 1000, "12", "12")
+            record = gate.evaluate(complete(), "", 0, 1200, "12", "12")
             record.update(apk_sha256=gate.sha256(apk), coverage="unauthenticated_startup_ui", startup_ui_ready=True)
             result.write_text(json.dumps(record))
             gate.verify_upload(apk, result)
             for patch in ({"status": "failed"}, {"events_injected": 0}, {"process_stable": False},
                           {"monkey_exit_code": 1}, {"crash_or_anr_detected": True}, {"monkey_aborted": True},
-                          {"startup_ui_ready": False}, {"input_injection_failed": True}, {"coverage": "untested"}, {"apk_sha256": "wrong"}, {"process_stable": "false"}):
+                          {"startup_ui_ready": False}, {"input_injection_failed": True}, {"touch_events_delivered": 999}, {"input_delivery_verified": False}, {"coverage": "untested"}, {"apk_sha256": "wrong"}, {"process_stable": "false"}):
                 with self.subTest(patch=patch), self.assertRaises(gate.GateFailure):
                     result.write_text(json.dumps({**record, **patch}))
                     gate.verify_upload(apk, result)
@@ -157,6 +165,6 @@ class MonkeyGateTest(unittest.TestCase):
 
     def test_raw_diagnostics_are_not_in_result(self):
         secret = "private-token-and-source-fragment"
-        result = gate.evaluate("Events injected: 1000\n// Monkey finished " + secret,
-                               "Process: info.nightscout.androidaps, PID: 12 " + secret, 0, 1000, "12", "12")
+        result = gate.evaluate(complete() + " " + secret,
+                               "Process: info.nightscout.androidaps, PID: 12 " + secret, 0, 1200, "12", "12")
         self.assertNotIn(secret, json.dumps(result))

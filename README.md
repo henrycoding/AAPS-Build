@@ -13,7 +13,7 @@ for emulator compatibility. If translation or the protected runtime cannot start
 the gate fails and upload is blocked. This first hosted run must establish actual
 compatibility; unit tests alone do not prove it.
 
-The gate injects 1000 touch/motion events with seed 42 and a 300 ms throttle.
+The gate schedules 1200 events and requires at least 1000 successful touch/motion injections with seed 42 and a 300 ms throttle.
 Crashes, ANRs, partial event counts, a missing/dead/restarted app process, a
 timeout, or missing log collection fail the gate. It never uses Monkey's
 ignore-crashes/ignore-timeouts flags. Before uploading, the APK SHA-256 must match
@@ -36,7 +36,7 @@ The archive never contains signing keys, checkout credentials, or Odoo secrets.
 The launcher is resolved from the installed manifest, including R8-renamed classes.
 
 The manual `Cloud Monkey gate self-test` workflow runs the same gate against
-disposable public fixtures: a healthy app must complete 1000 events, while apps
+disposable public fixtures: a healthy app must complete 1200 scheduled events and at least 1000 successful touch injections, while apps
 which deliberately crash or ANR on touch must fail. It also rejects a different
 APK paired with the healthy result. These controls validate the gate in Actions;
 they do not substitute for the protected APK's own run.
@@ -86,8 +86,11 @@ An Android `am start -W` timeout remains pending until the same process has a
 focused app window and rendered frames, with a 120-second readiness deadline.
 A stalled, dead or restarted process is rejected before Monkey begins. Prelaunch
 uses the same MAIN/LAUNCHER intent and task flags as Monkey, avoiding an extra
-Activity instance at the start of injection. Dropped or failed input also blocks
-admission even when Monkey reports the requested event count. Cloud
+Activity instance at the start of injection. The result counts successful touch injections separately: one initial Activity
+switch and dropped inputs never count toward the 1000-success minimum. The
+reported drop summary must match observed injection failures; missing/inconsistent
+traces, incomplete runs or fewer than 1000 successful touches block admission.
+Drops remain visible in the result; crashes and ANRs always fail the gate. Cloud
 controls cover a 12-second healthy startup and a deliberately hung startup.
 
 For a gate-only correction, `retest_run` and `retest_apk_sha256` select an existing

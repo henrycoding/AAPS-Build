@@ -983,7 +983,7 @@ jobs:
             --sdk "${sdk_root}" \
             --apk "app/${FLAVOR}/app-${FLAVOR}-release-protected.apk" \
             --result "${RUNNER_TEMP}/monkey-result.json"
-          echo 'Cloud Monkey passed 1000 events: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
+          echo 'Cloud Monkey passed 1200 scheduled events and at least 1000 successful touch injections: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Encrypt failed Monkey diagnostics for operator
         if: ${{ !cancelled() && steps.monkey.outcome == 'failure' }}
@@ -1129,7 +1129,7 @@ jobs:
             --sdk "${sdk_root}" \
             --apk "app/${FLAVOR}/app-${FLAVOR}-release-protected.apk" \
             --result "${RUNNER_TEMP}/monkey-result.json"
-          echo 'Cloud Monkey passed 1000 events: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
+          echo 'Cloud Monkey passed 1200 scheduled events and at least 1000 successful touch injections: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Encrypt failed Monkey diagnostics for operator
         if: ${{ !cancelled() && steps.monkey.outcome == 'failure' }}

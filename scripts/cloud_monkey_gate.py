@@ -17,6 +17,8 @@ import time
 PACKAGE = "info.nightscout.androidaps"
 SERIAL = "emulator-5554"
 IMAGE = "system-images;android-30;google_apis_playstore;x86_64"
+REQUESTED_EVENTS = 1200
+MIN_DELIVERED_TOUCH_EVENTS = 1000
 
 
 class GateFailure(Exception):
@@ -40,13 +42,28 @@ def evaluate(monkey, logcat, returncode, requested, before_pid, after_pid):
     crash |= bool(re.search(r"(?im)\bProcess:\s*" + app, logcat))
     aborted = bool(re.search(r"(?i)monkey aborted|system appears to have crashed|native crash|securityexception", monkey))
     stable = bool(before_pid and before_pid == after_pid)
-    dropped = any(int(n) > 0 for n in re.findall(r"(?:keys|pointers|trackballs|flips|rotations)=(\d+)", monkey))
-    injection_failed = dropped or bool(re.search(r"(?im)//\s*Injection Failed", monkey))
+    # Android may drop a gesture when SystemUI takes over an edge swipe.
+    # Count actual successful touch injections, not the misleading "injected"
+    # total (which also includes the initial Activity switch and failed inputs).
+    touch_attempts = len(re.findall(r"(?m)^:Sending Touch ", monkey))
+    switches = len(re.findall(r"(?m)^:Switch:", monkey))
+    failures = len(re.findall(r"(?m)^\s*// Injection Failed", monkey))
+    summaries = re.findall(r"(?m)^:Dropped: keys=(\d+) pointers=(\d+) trackballs=(\d+) flips=(\d+) rotations=(\d+)", monkey)
+    drops = tuple(map(int, summaries[-1])) if summaries else None
+    dropped = drops[1] if drops else 0
+    delivered = max(0, touch_attempts - dropped)
+    delivery_verified = bool(drops and drops[0] == drops[2] == drops[3] == drops[4] == 0
+                             and dropped == failures and switches == 1
+                             and touch_attempts + switches == injected
+                             and delivered >= MIN_DELIVERED_TOUCH_EVENTS)
     passed = (returncode == 0 and injected == requested and "Monkey finished" in monkey
-              and stable and not crash and not aborted and not injection_failed)
+              and stable and not crash and not aborted and delivery_verified)
     return {"status": "passed" if passed else "failed", "events_requested": requested, "events_injected": injected,
             "process_stable": stable, "crash_or_anr_detected": crash, "monkey_aborted": aborted,
-            "monkey_exit_code": returncode, "input_injection_failed": injection_failed}
+            "monkey_exit_code": returncode, "input_injection_failed": failures > 0,
+            "touch_events_attempted": touch_attempts, "touch_events_dropped": dropped,
+            "touch_events_delivered": delivered, "input_delivery_verified": delivery_verified}
+
 
 
 def ui_ready(windows, graphics, pid):
@@ -59,7 +76,7 @@ def ui_ready(windows, graphics, pid):
 
 
 class CloudGate:
-    def __init__(self, sdk, apk, directory, count=1000, throttle=300):
+    def __init__(self, sdk, apk, directory, count=REQUESTED_EVENTS, throttle=300):
         self.sdk, self.apk, self.directory = sdk, apk, directory
         self.count, self.throttle = count, throttle
         self.adb = sdk / "platform-tools/adb"
@@ -215,9 +232,16 @@ class CloudGate:
 def verify_upload(apk, result):
     record = json.loads(result.read_text())
     if (record.get("status") != "passed" or record.get("apk_sha256") != sha256(apk)
-            or record.get("events_requested") != 1000 or record.get("events_injected") != 1000
+            or record.get("events_requested") != REQUESTED_EVENTS or record.get("events_injected") != REQUESTED_EVENTS
+            or record.get("input_delivery_verified") is not True
+            or type(record.get("touch_events_attempted")) is not int or record["touch_events_attempted"] != REQUESTED_EVENTS - 1
+            or type(record.get("touch_events_dropped")) is not int or record["touch_events_dropped"] < 0
+            or type(record.get("touch_events_delivered")) is not int
+            or record["touch_events_delivered"] != record["touch_events_attempted"] - record["touch_events_dropped"]
+            or record["touch_events_delivered"] < MIN_DELIVERED_TOUCH_EVENTS
+            or record.get("input_injection_failed") is not (record["touch_events_dropped"] > 0)
             or record.get("coverage") != "unauthenticated_startup_ui" or record.get("process_stable") is not True
-            or record.get("startup_ui_ready") is not True or record.get("input_injection_failed") is not False
+            or record.get("startup_ui_ready") is not True
             or record.get("crash_or_anr_detected") is not False or record.get("monkey_aborted") is not False
             or record.get("monkey_exit_code") != 0):
         raise GateFailure("missing_or_mismatched_monkey_pass")
