@@ -1051,6 +1051,11 @@ jobs:
 
   retest:
     name: Retest exact protected APK
+    # GitHub hides draft releases unless the token has repository push access.
+    # Only this job needs it; build and public controls retain read-only tokens.
+    permissions:
+      contents: write
+      actions: read
     if: ${{ inputs.retest_run != '' }}
     needs: monkey_controls
     runs-on: ubuntu-24.04
@@ -1062,7 +1067,6 @@ jobs:
       FORCE_UPDATE: ${{ inputs.force_update }}
       RETEST_RUN: ${{ inputs.retest_run }}
       RETEST_APK_SHA256: ${{ inputs.retest_apk_sha256 }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout workflow support scripts
         uses: actions/checkout@v4
@@ -1072,6 +1076,7 @@ jobs:
       - name: Recover exact signed APK and verify original build provenance
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           RETEST_PRIVATE_KEY: ${{ secrets.MONKEY_RETEST_PRIVATE_KEY }}
         run: |
           set -euo pipefail

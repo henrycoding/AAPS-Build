@@ -86,6 +86,10 @@ class WorkflowTest(unittest.TestCase):
         retest = DOCUMENT['jobs']['retest']
         self.assertEqual("${{ inputs.retest_run != '' }}", retest['if'])
         self.assertEqual('monkey_controls', retest['needs'])
+        self.assertEqual({'contents': 'write', 'actions': 'read'}, retest['permissions'])
+        self.assertEqual('read', DOCUMENT['permissions']['contents'])
+        self.assertNotIn('GH_TOKEN', retest['env'])
+        self.assertIn('GH_TOKEN', retest['steps'][1]['env'])
         shared = next(i for i, step in enumerate(STEPS) if step['name'] == 'Prepare Google Play cloud emulator')
         self.assertEqual(STEPS[shared:], retest['steps'][2:])
         recovery = retest['steps'][1]['run']
