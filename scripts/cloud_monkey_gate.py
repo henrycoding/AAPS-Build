@@ -76,9 +76,10 @@ def ui_ready(windows, graphics, pid):
 
 
 class CloudGate:
-    def __init__(self, sdk, apk, directory, count=REQUESTED_EVENTS, throttle=300):
+    def __init__(self, sdk, apk, directory, count=REQUESTED_EVENTS, throttle=300, idle_resume_seconds=0):
         self.sdk, self.apk, self.directory = sdk, apk, directory
         self.count, self.throttle = count, throttle
+        self.idle_resume_seconds = idle_resume_seconds
         self.adb = sdk / "platform-tools/adb"
         self.emulator = None
         self.collector = None
@@ -117,6 +118,31 @@ class CloudGate:
         handle = (self.directory / name).open("wb")
         self.handles.append(handle)
         return subprocess.Popen([str(arg) for arg in args], stdout=handle, stderr=subprocess.STDOUT, env=self.env)
+
+    def idle_and_resume(self, component, expected_pid):
+        # HOME backgrounds only this isolated emulator. Keep logcat collecting;
+        # a process death or restart at any point is a failure, never a retry.
+        self.device("shell", "input", "keyevent", "KEYCODE_HOME")
+        started = time.monotonic()
+        while time.monotonic() - started < self.idle_resume_seconds:
+            time.sleep(5)
+            if self.pid() != expected_pid:
+                raise GateFailure("app_exited_or_restarted_during_idle")
+        elapsed = time.monotonic() - started
+        self.device("shell", "input", "keyevent", "KEYCODE_WAKEUP")
+        self.device("shell", "input", "keyevent", "82")
+        # The startup frame counter must not make a frozen resume look ready.
+        self.device("shell", "dumpsys", "gfxinfo", PACKAGE, "reset", log="resume-reset-graphics.log")
+        output = self.device("shell", "am", "start", "-W", "-a", "android.intent.action.MAIN",
+                             "-c", "android.intent.category.LAUNCHER", "-f", "0x10200000",
+                             "-n", component, timeout=120, log="resume.log")
+        if not re.search(r"(?m)^Status: (?:ok|timeout)$", output):
+            raise GateFailure("app_resume_failed")
+        self.wait_for_ui(expected_pid)
+        time.sleep(20)
+        if self.pid() != expected_pid:
+            raise GateFailure("app_exited_or_restarted_after_resume")
+        return elapsed
 
     def start(self):
         (self.directory / "avds").mkdir()
@@ -216,6 +242,12 @@ class CloudGate:
             raise GateFailure("monkey_timeout") from error
         time.sleep(3)
         after = self.pid()
+        idle_elapsed = 0
+        preliminary = evaluate((self.directory / "monkey.log").read_text(errors="replace"),
+                               (self.directory / "logcat.log").read_text(errors="replace"), result.returncode, self.count, before, after)
+        if preliminary["status"] == "passed" and self.idle_resume_seconds:
+            idle_elapsed = self.idle_and_resume(component, before)
+            after = self.pid()
         if self.collector.poll() is not None:
             raise GateFailure("logcat_collection_stopped")
         self.collector.terminate()
@@ -225,7 +257,10 @@ class CloudGate:
             handle.flush()
         record = evaluate((self.directory / "monkey.log").read_text(errors="replace"),
                           (self.directory / "logcat.log").read_text(errors="replace"), result.returncode, self.count, before, after)
-        return dict(record, startup_ui_ready=True, startup_wait_seconds=startup_wait)
+        return dict(record, startup_ui_ready=True, startup_wait_seconds=startup_wait,
+                    idle_resume_seconds=self.idle_resume_seconds,
+                    idle_observed_seconds=round(idle_elapsed, 1),
+                    idle_resume_passed=idle_elapsed >= self.idle_resume_seconds > 0 and record["status"] == "passed")
 
     def close(self):
         for process in (self.collector, self.emulator):
@@ -240,7 +275,7 @@ class CloudGate:
             handle.close()
 
 
-def verify_upload(apk, result):
+def verify_upload(apk, result, require_idle_seconds=0):
     record = json.loads(result.read_text())
     if (record.get("status") != "passed" or record.get("apk_sha256") != sha256(apk)
             or record.get("events_requested") != REQUESTED_EVENTS or record.get("events_injected") != REQUESTED_EVENTS
@@ -256,6 +291,11 @@ def verify_upload(apk, result):
             or record.get("crash_or_anr_detected") is not False or record.get("monkey_aborted") is not False
             or record.get("monkey_exit_code") != 0):
         raise GateFailure("missing_or_mismatched_monkey_pass")
+    if require_idle_seconds and (record.get("idle_resume_passed") is not True
+            or record.get("idle_resume_seconds") != require_idle_seconds
+            or type(record.get("idle_observed_seconds")) not in (int, float)
+            or not require_idle_seconds <= record["idle_observed_seconds"] <= 1200):
+        raise GateFailure("missing_idle_resume_pass")
 
 
 def main():
@@ -264,19 +304,20 @@ def main():
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--result", type=Path, required=True)
     parser.add_argument("--verify-upload", action="store_true")
+    parser.add_argument("--idle-resume-seconds", type=int, choices=(0, 330), default=0)
     args = parser.parse_args()
     os.umask(0o077)
     gate = None
     try:
         if args.verify_upload:
-            verify_upload(args.apk, args.result)
+            verify_upload(args.apk, args.result, args.idle_resume_seconds)
             print("Exact protected APK has a passing cloud Monkey smoke result.")
             return 0
         if sys.platform != "linux" or os.environ.get("GITHUB_ACTIONS") != "true" or not args.sdk:
             raise GateFailure("requires_isolated_linux_github_runner")
         directory = args.result.parent / "cloud-monkey-private"
-        directory.mkdir(mode=0o700)
-        gate = CloudGate(args.sdk, args.apk.resolve(), directory)
+        directory.mkdir(mode=0o700, exist_ok=True)  # May contain sealed-regression input logs; start() still requires a fresh AVD directory.
+        gate = CloudGate(args.sdk, args.apk.resolve(), directory, idle_resume_seconds=args.idle_resume_seconds)
         record = {"status": "failed", "apk_sha256": sha256(args.apk), "coverage": "unauthenticated_startup_ui", "system_image": IMAGE}
         try:
             gate.start()

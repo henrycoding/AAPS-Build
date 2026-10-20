@@ -182,3 +182,47 @@ class MonkeyGateTest(unittest.TestCase):
         result = gate.evaluate(complete() + " " + secret,
                                "Process: info.nightscout.androidaps, PID: 12 " + secret, 0, 1200, "12", "12")
         self.assertNotIn(secret, json.dumps(result))
+
+    def test_idle_resume_waits_full_ttl_and_never_restarts_a_dead_process(self):
+        probe = gate.CloudGate(Path('/sdk'), Path('/app.apk'), Path('/private'), idle_resume_seconds=330)
+        probe.device = Mock(return_value='Status: ok')
+        probe.pid = Mock(return_value='12')
+        probe.wait_for_ui = Mock(return_value=0)
+        with patch.object(gate.time, 'monotonic', side_effect=[0, 0, 100, 330, 330]), patch.object(gate.time, 'sleep'):
+            self.assertEqual(330, probe.idle_and_resume(gate.PACKAGE + '/Main', '12'))
+        self.assertEqual(('shell', 'input', 'keyevent', 'KEYCODE_HOME'), probe.device.call_args_list[0].args)
+        probe.pid = Mock(return_value='13')
+        probe.device.reset_mock()
+        with patch.object(gate.time, 'monotonic', side_effect=[0, 0]), patch.object(gate.time, 'sleep'):
+            with self.assertRaisesRegex(gate.GateFailure, 'during_idle'):
+                probe.idle_and_resume(gate.PACKAGE + '/Main', '12')
+        self.assertEqual(1, probe.device.call_count)  # No launch/restart after death.
+
+    def test_resume_hang_or_process_change_is_rejected(self):
+        probe = gate.CloudGate(Path('/sdk'), Path('/app.apk'), Path('/private'), idle_resume_seconds=330)
+        probe.device = Mock(return_value='Status: ok')
+        probe.wait_for_ui = Mock(side_effect=gate.GateFailure('startup_ui_not_ready'))
+        with patch.object(gate.time, 'monotonic', side_effect=[0, 330, 330]):
+            with self.assertRaisesRegex(gate.GateFailure, 'startup_ui_not_ready'):
+                probe.idle_and_resume(gate.PACKAGE + '/Main', '12')
+        probe.wait_for_ui = Mock(return_value=0)
+        probe.pid = Mock(return_value='13')
+        with patch.object(gate.time, 'monotonic', side_effect=[0, 330, 330]), patch.object(gate.time, 'sleep'):
+            with self.assertRaisesRegex(gate.GateFailure, 'after_resume'):
+                probe.idle_and_resume(gate.PACKAGE + '/Main', '12')
+
+    def test_production_upload_requires_same_apk_and_verified_full_idle_interval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk, result = Path(directory) / 'app.apk', Path(directory) / 'result.json'
+            apk.write_bytes(b'protected fixture')
+            record = gate.evaluate(complete(), '', 0, 1200, '12', '12')
+            record.update(apk_sha256=gate.sha256(apk), coverage='unauthenticated_startup_ui', startup_ui_ready=True,
+                          idle_resume_seconds=330, idle_observed_seconds=330.2, idle_resume_passed=True)
+            result.write_text(json.dumps(record))
+            gate.verify_upload(apk, result, 330)
+            for changes in ({'idle_resume_passed': False}, {'idle_resume_seconds': 0},
+                            {'idle_observed_seconds': 329.9}, {'idle_observed_seconds': '330'},
+                            {'idle_observed_seconds': float('nan')}, {'crash_or_anr_detected': True}):
+                with self.subTest(changes=changes), self.assertRaises(gate.GateFailure):
+                    result.write_text(json.dumps({**record, **changes}))
+                    gate.verify_upload(apk, result, 330)

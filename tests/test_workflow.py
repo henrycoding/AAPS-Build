@@ -80,6 +80,22 @@ class WorkflowTest(unittest.TestCase):
         encrypted = script('Encrypt failed Monkey diagnostics for operator')
         self.assertIn('encrypt_monkey_diagnostics.py', encrypted)
         self.assertIn('--certificate', encrypted)
+        runtime = names.index('Verify protected runtime regressions')
+        self.assertLess(names.index('Verify protected APK output'), runtime)
+        self.assertLess(runtime, prepare)
+        self.assertIn('security_regressions.outcome', artifacts[0]['if'])
+
+    def test_runtime_failure_stops_checks_and_keeps_private_diagnostics_sealed(self):
+        directory = self.root / 'third_party/protectPacker/guard-common/tests/inventory'
+        directory.mkdir(parents=True)
+        (directory / 'run_state_tests.py').write_text("print('private-runtime-diagnostic'); raise SystemExit(3)\n")
+        result = self.run_step('Verify protected runtime regressions')
+        self.assertNotEqual(0, result.returncode)
+        self.assertNotIn('private-runtime-diagnostic', result.stdout + result.stderr)
+        record = json.loads((self.root / 'monkey-result.json').read_text())
+        self.assertEqual('failed', record['status'])
+        self.assertEqual('runtime_regressions_failed', record['reason'])
+        self.assertIn('private-runtime-diagnostic', (self.root / 'cloud-monkey-private/runtime-regressions.log').read_text())
 
     def test_retest_uses_identical_cloud_gate_and_upload_with_exclusive_job(self):
         self.assertEqual("${{ inputs.retest_run == '' }}", DOCUMENT['jobs']['build']['if'])
@@ -113,9 +129,11 @@ class WorkflowTest(unittest.TestCase):
         record = {'status': 'passed', 'apk_sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
                   'coverage': 'unauthenticated_startup_ui', 'startup_ui_ready': True, 'input_injection_failed': False, 'events_requested': 1200, 'events_injected': 1200,
                   'touch_events_attempted': 1199, 'touch_events_dropped': 0, 'touch_events_delivered': 1199, 'input_delivery_verified': True,
-                  'process_stable': True, 'crash_or_anr_detected': False, 'monkey_aborted': False, 'monkey_exit_code': 0}
+                  'process_stable': True, 'crash_or_anr_detected': False, 'monkey_aborted': False, 'monkey_exit_code': 0,
+                  'idle_resume_passed': True, 'idle_resume_seconds': 330, 'idle_observed_seconds': 330.5}
         result_file = self.root / 'monkey-result.json'
-        for patch in (None, {'status': 'failed'}, {'apk_sha256': 'stale'}, {'events_injected': 999}, {}):
+        for patch in (None, {'status': 'failed'}, {'apk_sha256': 'stale'}, {'events_injected': 999},
+                      {'idle_resume_passed': False}, {'idle_observed_seconds': 299}, {'idle_resume_seconds': 0}, {}):
             with self.subTest(patch=patch):
                 if result_file.exists():
                     result_file.unlink()

@@ -10,7 +10,7 @@ permissions:
 jobs:
   controls:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,12 +39,14 @@ jobs:
             mkdir "${RUNNER_TEMP}/monkey-controls/result-${mode}"
             result="${RUNNER_TEMP}/monkey-controls/result-${mode}/result.json"
             rc=0
+            idle_seconds=0
+            if [[ "${mode}" == 'healthy' ]]; then idle_seconds=330; fi
             python3 scripts/cloud_monkey_gate.py --sdk "${sdk_root}" \
-              --apk "${RUNNER_TEMP}/monkey-controls/${mode}.apk" --result "${result}" || rc=$?
+              --apk "${RUNNER_TEMP}/monkey-controls/${mode}.apk" --result "${result}" --idle-resume-seconds "${idle_seconds}" || rc=$?
             if [[ "${rc}" -ne 0 ]]; then
               # These diagnostics contain only the public disposable controls;
               # the private-source build never publishes raw device logs.
-              for log in emulator.log adb-server.log boot-adb.log boot-package.log install.log launch.log startup-window.log startup-graphics.log monkey.log logcat.log; do
+              for log in emulator.log adb-server.log boot-adb.log boot-package.log install.log launch.log startup-window.log startup-graphics.log resume-reset-graphics.log resume.log monkey.log logcat.log; do
                 path="${RUNNER_TEMP}/monkey-controls/result-${mode}/cloud-monkey-private/${log}"
                 if [[ -f "${path}" ]]; then tail -n 60 "${path}"; fi
               done
@@ -56,6 +58,7 @@ jobs:
           r=json.loads(Path(path).read_text())
           if mode=='healthy':
               assert int(rc)==0 and r['status']=='passed' and r['events_injected']==1200 and r['touch_events_delivered']>=1000,r
+              assert r['idle_resume_passed'] is True and r['idle_resume_seconds']==330 and r['idle_observed_seconds']>=330,r
           elif mode=='startup_hang':
               assert int(rc)!=0 and r['status']=='failed' and r.get('reason')=='startup_ui_not_ready',r
           else:
@@ -64,7 +67,7 @@ jobs:
           PY
           done
           python3 scripts/cloud_monkey_gate.py --verify-upload --apk "${RUNNER_TEMP}/monkey-controls/healthy.apk" \
-            --result "${RUNNER_TEMP}/monkey-controls/result-healthy/result.json"
+            --result "${RUNNER_TEMP}/monkey-controls/result-healthy/result.json" --idle-resume-seconds 330
           if python3 scripts/cloud_monkey_gate.py --verify-upload --apk "${RUNNER_TEMP}/monkey-controls/crash.apk" \
             --result "${RUNNER_TEMP}/monkey-controls/result-healthy/result.json"; then
             echo 'Replacement APK incorrectly admitted.'

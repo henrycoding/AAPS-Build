@@ -79,7 +79,7 @@ jobs:
     needs: monkey_controls
     # O-MVLL 1.9 Linux binaries require the Ubuntu 24 runtime libraries.
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 135
 
     env:
       PRIVATE_REF: ${{ inputs.private_ref }}
@@ -948,6 +948,43 @@ jobs:
           fi
           echo "Verified protected APK: ${apk_path}"
 
+      - name: Verify protected runtime regressions
+        id: security_regressions
+        timeout-minutes: 15
+        shell: bash
+        working-directory: private-source/${{ inputs.project_dir }}
+        run: |
+          set -euo pipefail
+          umask 077
+          logs="${RUNNER_TEMP}/cloud-monkey-private"
+          mkdir -p "${logs}"
+          checks() {
+            python3 third_party/protectPacker/guard-common/tests/inventory/run_state_tests.py \
+              --java-home "${JAVA_HOME_17_X64}" --work-dir "${RUNNER_TEMP}/runtime-java-state"
+            python3 third_party/protectPacker/guard-common/tests/inventory/run_publication_jni.py \
+              --java-home "${JAVA_HOME_17_X64}" --work-dir "${RUNNER_TEMP}/runtime-native-publication" \
+              --apk "app/${FLAVOR}/app-${FLAVOR}-release-protected.apk"
+            python3 third_party/protectPacker/guard-common/tests/maps-scan/run_tests.py
+            if [[ "${FLAVOR}" == 'full' ]]; then
+              # Actual Release Manifest and protected shell now exist. Do not
+              # replace these integration fixtures with stubs or rebuild them.
+              (cd third_party/protectPacker && JAVA_HOME="${JAVA_HOME_17_X64}" \
+                ./gradlew --no-daemon --no-parallel --console=plain --max-workers=2 \
+                -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2" \
+                -Pkotlin.compiler.execution.strategy=in-process :packer:test -x :shell:exportShellDex)
+            fi
+          }
+          set +e
+          (set -e; checks) > "${logs}/runtime-regressions.log" 2>&1
+          status="$?"
+          set -e
+          if [[ "${status}" -ne 0 ]]; then
+            echo '{"status":"failed","reason":"runtime_regressions_failed"}' > "${RUNNER_TEMP}/monkey-result.json"
+            echo 'Protected runtime regressions failed; Monkey and Odoo are blocked. Diagnostics will be encrypted.'
+            exit 1
+          fi
+          echo 'Protected runtime state, JNI, tamper and anti-debug regressions passed.' >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Prepare Google Play cloud emulator
         timeout-minutes: 12
         shell: bash
@@ -973,7 +1010,7 @@ jobs:
 
       - name: Monkey test exact protected APK in cloud
         id: monkey
-        timeout-minutes: 20
+        timeout-minutes: 25
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
         run: |
@@ -982,11 +1019,11 @@ jobs:
           python3 "${GITHUB_WORKSPACE}/build-tools/scripts/cloud_monkey_gate.py" \
             --sdk "${sdk_root}" \
             --apk "app/${FLAVOR}/app-${FLAVOR}-release-protected.apk" \
-            --result "${RUNNER_TEMP}/monkey-result.json"
-          echo 'Cloud Monkey passed 1200 scheduled events and at least 1000 successful touch injections: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
+            --result "${RUNNER_TEMP}/monkey-result.json" --idle-resume-seconds 330
+          echo 'Cloud Monkey passed 1200 scheduled events, at least 1000 successful touch injections, and 330-second background/resume with the same PID: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Encrypt failed Monkey diagnostics for operator
-        if: ${{ !cancelled() && steps.monkey.outcome == 'failure' }}
+        if: ${{ !cancelled() && (steps.monkey.outcome == 'failure' || steps.security_regressions.outcome == 'failure') }}
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
         run: |
@@ -998,7 +1035,7 @@ jobs:
             --output "${RUNNER_TEMP}/monkey-diagnostics.cms"
 
       - name: Preserve encrypted failure diagnostics
-        if: ${{ !cancelled() && steps.monkey.outcome == 'failure' }}
+        if: ${{ !cancelled() && (steps.monkey.outcome == 'failure' || steps.security_regressions.outcome == 'failure') }}
         uses: actions/upload-artifact@v4
         with:
           name: encrypted-monkey-diagnostics
@@ -1027,7 +1064,7 @@ jobs:
           # Bind admission to the bytes actually tested, not just a previous
           # green step or a filename which could have been replaced afterwards.
           python3 "${GITHUB_WORKSPACE}/build-tools/scripts/cloud_monkey_gate.py" \
-            --verify-upload --apk "${apk_path}" --result "${RUNNER_TEMP}/monkey-result.json"
+            --verify-upload --apk "${apk_path}" --result "${RUNNER_TEMP}/monkey-result.json" --idle-resume-seconds 330
 
           allowed_phone_numbers="${AAPS_ALLOWED_PHONE_NUMBERS:-*}"
           force_update_value="0"
@@ -1059,7 +1096,7 @@ jobs:
     if: ${{ inputs.retest_run != '' }}
     needs: monkey_controls
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 40
     env:
       PRIVATE_REF: ${{ inputs.private_ref }}
       FLAVOR: ${{ inputs.flavor }}
@@ -1124,7 +1161,7 @@ jobs:
 
       - name: Monkey test exact protected APK in cloud
         id: monkey
-        timeout-minutes: 20
+        timeout-minutes: 25
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
         run: |
@@ -1133,11 +1170,11 @@ jobs:
           python3 "${GITHUB_WORKSPACE}/build-tools/scripts/cloud_monkey_gate.py" \
             --sdk "${sdk_root}" \
             --apk "app/${FLAVOR}/app-${FLAVOR}-release-protected.apk" \
-            --result "${RUNNER_TEMP}/monkey-result.json"
-          echo 'Cloud Monkey passed 1200 scheduled events and at least 1000 successful touch injections: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
+            --result "${RUNNER_TEMP}/monkey-result.json" --idle-resume-seconds 330
+          echo 'Cloud Monkey passed 1200 scheduled events, at least 1000 successful touch injections, and 330-second background/resume with the same PID: unauthenticated startup/UI smoke only; no logged-in or pump coverage.' >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Encrypt failed Monkey diagnostics for operator
-        if: ${{ !cancelled() && steps.monkey.outcome == 'failure' }}
+        if: ${{ !cancelled() && (steps.monkey.outcome == 'failure' || steps.security_regressions.outcome == 'failure') }}
         shell: bash
         working-directory: private-source/${{ inputs.project_dir }}
         run: |
@@ -1149,7 +1186,7 @@ jobs:
             --output "${RUNNER_TEMP}/monkey-diagnostics.cms"
 
       - name: Preserve encrypted failure diagnostics
-        if: ${{ !cancelled() && steps.monkey.outcome == 'failure' }}
+        if: ${{ !cancelled() && (steps.monkey.outcome == 'failure' || steps.security_regressions.outcome == 'failure') }}
         uses: actions/upload-artifact@v4
         with:
           name: encrypted-monkey-diagnostics
@@ -1178,7 +1215,7 @@ jobs:
           # Bind admission to the bytes actually tested, not just a previous
           # green step or a filename which could have been replaced afterwards.
           python3 "${GITHUB_WORKSPACE}/build-tools/scripts/cloud_monkey_gate.py" \
-            --verify-upload --apk "${apk_path}" --result "${RUNNER_TEMP}/monkey-result.json"
+            --verify-upload --apk "${apk_path}" --result "${RUNNER_TEMP}/monkey-result.json" --idle-resume-seconds 330
 
           allowed_phone_numbers="${AAPS_ALLOWED_PHONE_NUMBERS:-*}"
           force_update_value="0"

@@ -20,6 +20,21 @@ ignore-crashes/ignore-timeouts flags. Before uploading, the APK SHA-256 must mat
 the passing result. The existing manual script in the private source repository
 is separate and is not used as the admission check.
 
+The protected APK must also survive 330 seconds in the background after Monkey,
+then resume with the same PID and a focused application window with freshly
+rendered frames. Frame counters are reset before resume to reject stale startup
+evidence, and logcat remains active throughout. A further 20-second observation
+checks the asynchronous resume work. This crosses the 300-second integrity trust
+lifetime without weakening it; it is not an authenticated or OEM suspend test.
+Both build and retest upload steps require the verified 330-second result as well
+as the APK hash. The healthy public control exercises this path before building.
+
+After a new protected APK is built, real Java state/publication fault cases,
+native JNI inventory and tamper cases, and native instrumentation fixtures run
+before Monkey. Full builds also run the packer suite using the freshly built
+Release Manifest and protected shell. Failures block Monkey/upload and keep the
+exact APK plus regression log in the same encrypted operator diagnostics.
+
 Coverage is **unauthenticated startup and UI smoke only** on a clean emulator.
 No production customer credentials, logged-in functionality, BLE connections,
 pump commands, or dosing paths are exercised. This does not replace physical
