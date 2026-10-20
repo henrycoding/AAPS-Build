@@ -13,6 +13,19 @@ spec.loader.exec_module(gate)
 
 
 class MonkeyGateTest(unittest.TestCase):
+    def test_adb_identity_is_ready_before_secure_emulator_boot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = gate.CloudGate(Path('/sdk'), Path('/app.apk'), Path(directory))
+            trace = []
+            probe.command = lambda args, **kwargs: trace.append(str(args[1])) or ''
+            process = Mock()
+            process.poll.return_value = None
+            probe.background = lambda args, log: trace.append('emulator') or process
+            probe.device = lambda *args, **kwargs: '1'
+            probe.start()
+            self.assertLess(trace.index('start-server'), trace.index('emulator'))
+            self.assertNotIn('ANDROID_EMULATOR_HOME', {k: v for k, v in probe.env.items() if k not in gate.os.environ})
+
     def test_actual_monkey_invocation_targets_only_emulator_and_stops_on_errors(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)

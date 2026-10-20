@@ -54,8 +54,9 @@ class CloudGate:
         self.emulator = None
         self.collector = None
         self.handles = []
-        self.env = dict(os.environ, ANDROID_AVD_HOME=str(directory / "avds"),
-                        ANDROID_EMULATOR_HOME=str(directory / "emulator-home"))
+        # Keep emulator and adb on the same default Android user/key directory.
+        # Isolating EMULATOR_HOME alone can separate Play-image ADB auth keys.
+        self.env = dict(os.environ, ANDROID_AVD_HOME=str(directory / "avds"))
 
     def command(self, args, timeout=30, log=None, data=None):
         try:
@@ -85,19 +86,20 @@ class CloudGate:
         return subprocess.Popen([str(arg) for arg in args], stdout=handle, stderr=subprocess.STDOUT, env=self.env)
 
     def start(self):
-        for name in ("avds", "emulator-home"):
-            (self.directory / name).mkdir()
+        (self.directory / "avds").mkdir()
+        # Generate/load host ADB identity before the secure Play image boots.
+        self.command([self.adb, "start-server"], log="adb-server.log")
         self.command([self.sdk / "cmdline-tools/latest/bin/avdmanager", "create", "avd", "--force", "--name", "aaps-monkey",
                       "--package", IMAGE, "--device", "pixel_2"], log="avd.log", data=b"no\n", timeout=90)
         self.emulator = self.background([self.sdk / "emulator/emulator", "-avd", "aaps-monkey", "-port", "5554",
             "-no-window", "-no-audio", "-no-boot-anim", "-no-snapshot", "-gpu", "swiftshader_indirect",
-            "-memory", "2048", "-cores", "2", "-accel", "on", "-camera-back", "none", "-camera-front", "none"], "emulator.log")
+            "-feature", "-Vulkan", "-memory", "2048", "-cores", "2", "-accel", "on", "-camera-back", "none", "-camera-front", "none"], "emulator.log")
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
             if self.emulator.poll() is not None:
                 raise GateFailure("emulator_stopped_during_boot")
             try:
-                if self.device("shell", "getprop", "sys.boot_completed", timeout=10).strip() == "1":
+                if self.device("shell", "getprop", "sys.boot_completed", timeout=10, log="boot-adb.log").strip() == "1":
                     return
             except GateFailure:
                 pass
