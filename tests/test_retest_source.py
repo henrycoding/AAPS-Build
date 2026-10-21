@@ -15,15 +15,20 @@ class RetestTest(unittest.TestCase):
     def test_original_build_and_hash_must_prove_a_gate_only_failure(self):
         run = {'workflow_id': 306791256, 'conclusion': 'failure'}
         steps = {'Verify protected APK output': 'success', 'Monkey test exact protected APK in cloud': 'failure',
+                 'Verify protected runtime regressions': 'success',
                  'Upload APK draft to Odoo AAPS update manager': 'skipped'}
         jobs = lambda s: [{'name': 'Build private Gradle project', 'steps': [{'name': k, 'conclusion': v} for k, v in s.items()]}]
         log = 'PRIVATE_REF: source\nFLAVOR: full\n{"apk_sha256": "expected", "status": "failed"}'
         retest.validate(run, jobs(steps), log, 'source', 'full', 'expected')
         for changes in ({'Verify protected APK output': 'failure'},
+                        {'Verify protected runtime regressions': 'failure'},
+                        {'Verify protected runtime regressions': 'skipped'},
                         {'Monkey test exact protected APK in cloud': 'skipped'},
                         {'Upload APK draft to Odoo AAPS update manager': 'success'}):
             with self.assertRaises(ValueError):
                 retest.validate(run, jobs({**steps, **changes}), log, 'source', 'full', 'expected')
+        with self.assertRaises(ValueError):
+            retest.validate(run, jobs({k: v for k, v in steps.items() if k != 'Verify protected runtime regressions'}), log, 'source', 'full', 'expected')
         for source, flavor, sha in (('other', 'full', 'expected'), ('source', 'mednovo', 'expected'), ('source', 'full', 'other')):
             with self.assertRaises(ValueError):
                 retest.validate(run, jobs(steps), log, source, flavor, sha)

@@ -1,0 +1,32 @@
+{
+  "status": "retest_pending",
+  "source_sha": "5b334edb0525fee3868181595515792ede4d6d00",
+  "original_run": 39508454612,
+  "original_workflow_sha": "6f23dce913a744301cdc8d7e76e96bac5626a9ee",
+  "apk_sha256": "d40f391e9144da30a425dfbc14e9fdfe0af15580f39da12ae3bf04802858f7b8",
+  "apk_bytes": 45271568,
+  "original_build": "success",
+  "original_runtime_regressions": "success",
+  "java_state_cases_passed": 40,
+  "jni_publication_case_lines_including_actual_apk": 30,
+  "packer_suite": "success; actual Release Manifest and protected shell",
+  "monkey": {
+    "events_requested": 1200,
+    "events_injected": 1200,
+    "delivered_touches": 1199,
+    "dropped_touches": 0,
+    "finished": true,
+    "exit_code": 0
+  },
+  "original_gate_result": "failed: app_exited_or_restarted_during_idle",
+  "odoo_upload": "skipped",
+  "death_evidence": {
+    "source": "Android lowmemorykiller system log",
+    "oom_adj": 700,
+    "app_rss_kib": 607800,
+    "reason": "low watermark is breached and swap is low (0kB < 152144kB)",
+    "guest_ram_mib": 2048
+  },
+  "fix": "Use 4096 MiB on the same genuine Google Play image; keep crash/ANR and same-PID gates unchanged. Retest provenance additionally requires successful original runtime regressions.",
+  "scope": "No APK, authorization, pump logic or security protection changed. Not low-RAM/OEM background survival coverage."
+}

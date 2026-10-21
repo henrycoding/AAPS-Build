@@ -7,7 +7,7 @@ APK, and optionally uploads an Odoo draft only after the gate passes.
 ## Cloud Monkey gate
 
 The same Ubuntu runner starts a fresh Android 11 Google Play x86_64 emulator
-with ARM translation. Its genuine user/release-key properties are checked;
+with ARM translation and 4 GiB guest RAM. Its genuine user/release-key properties are checked;
 no app protection, authentication, system properties, or APK bytes are weakened
 for emulator compatibility. If translation or the protected runtime cannot start,
 the gate fails and upload is blocked. This first hosted run must establish actual
@@ -28,6 +28,8 @@ checks the asynchronous resume work. This crosses the 300-second integrity trust
 lifetime without weakening it; it is not an authenticated or OEM suspend test.
 Both build and retest upload steps require the verified 330-second result as well
 as the APK hash. The healthy public control exercises this path before building.
+Any low-memory process kill also fails this same-PID check. The 4 GiB Play image
+coverage does not establish background survival on low-RAM watches or phones.
 
 After a new protected APK is built, real Java state/publication fault cases,
 native JNI inventory and tamper cases, and native instrumentation fixtures run
@@ -110,7 +112,7 @@ controls cover a 12-second healthy startup and a deliberately hung startup.
 
 For a gate-only correction, `retest_run` and `retest_apk_sha256` select an existing
 failed build's unchanged signed APK. The mutually exclusive retest job requires
-successful original protected-output verification, a failed original Monkey gate,
+successful original protected-output and runtime-regression verification, a failed original Monkey gate,
 a skipped original Odoo upload, matching source/flavor and original gate SHA-256,
 a valid APK signature, and the same mandatory controls/Monkey/upload gate.
 A temporary encrypted draft-release asset transfers those bytes, using a separate

@@ -19,6 +19,7 @@ SERIAL = "emulator-5554"
 IMAGE = "system-images;android-30;google_apis_playstore;x86_64"
 REQUESTED_EVENTS = 1200
 MIN_DELIVERED_TOUCH_EVENTS = 1000
+EMULATOR_RAM_MB = 4096
 
 
 class GateFailure(Exception):
@@ -152,7 +153,7 @@ class CloudGate:
                       "--package", IMAGE, "--device", "pixel_2"], log="avd.log", data=b"no\n", timeout=90)
         self.emulator = self.background([self.sdk / "emulator/emulator", "-avd", "aaps-monkey", "-port", "5554",
             "-no-window", "-no-audio", "-no-boot-anim", "-no-snapshot", "-gpu", "swiftshader_indirect",
-            "-feature", "-Vulkan", "-memory", "2048", "-cores", "2", "-accel", "on", "-camera-back", "none", "-camera-front", "none"], "emulator.log")
+            "-feature", "-Vulkan", "-memory", str(EMULATOR_RAM_MB), "-cores", "2", "-accel", "on", "-camera-back", "none", "-camera-front", "none"], "emulator.log")
         deadline = time.monotonic() + 300
         ready_checks = 0
         while time.monotonic() < deadline:
@@ -318,7 +319,8 @@ def main():
         directory = args.result.parent / "cloud-monkey-private"
         directory.mkdir(mode=0o700, exist_ok=True)  # May contain sealed-regression input logs; start() still requires a fresh AVD directory.
         gate = CloudGate(args.sdk, args.apk.resolve(), directory, idle_resume_seconds=args.idle_resume_seconds)
-        record = {"status": "failed", "apk_sha256": sha256(args.apk), "coverage": "unauthenticated_startup_ui", "system_image": IMAGE}
+        record = {"status": "failed", "apk_sha256": sha256(args.apk), "coverage": "unauthenticated_startup_ui", "system_image": IMAGE,
+                  "emulator_ram_mb": EMULATOR_RAM_MB}
         try:
             gate.start()
             record.update(gate.test())

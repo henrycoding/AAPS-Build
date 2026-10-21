@@ -16,6 +16,7 @@ def validate(run, jobs, log, source_ref, flavor, expected_sha):
     build = next(j for j in jobs if j['name'] == 'Build private Gradle project')
     steps = {s['name']: s['conclusion'] for s in build['steps']}
     if (steps.get('Verify protected APK output') != 'success'
+            or steps.get('Verify protected runtime regressions') != 'success'
             or steps.get('Monkey test exact protected APK in cloud') != 'failure'
             or steps.get('Upload APK draft to Odoo AAPS update manager') != 'skipped'):
         raise ValueError('source_build_not_verified_and_blocked_at_monkey')

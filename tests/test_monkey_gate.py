@@ -27,7 +27,11 @@ class MonkeyGateTest(unittest.TestCase):
             probe.command = lambda args, **kwargs: trace.append(str(args[1])) or ''
             process = Mock()
             process.poll.return_value = None
-            probe.background = lambda args, log: trace.append('emulator') or process
+            def start_emulator(args, log):
+                self.assertEqual('4096', args[args.index('-memory') + 1])
+                trace.append('emulator')
+                return process
+            probe.background = start_emulator
             probe.device = lambda *args, **kwargs: 'package:/system/framework/framework-res.apk' if args[:3] == ('shell', 'cmd', 'package') else '1'
             with patch.object(gate.time, 'sleep'):
                 probe.start()
